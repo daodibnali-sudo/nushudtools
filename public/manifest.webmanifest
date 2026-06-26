@@ -1,0 +1,18 @@
+{
+  "name": "NUSHUD Sync Tool",
+  "short_name": "NUSHUD Sync",
+  "description": "Local browser tool for syncing nasheed lyrics and translations with MP3 audio.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0a0a0a",
+  "theme_color": "#a97b3d",
+  "icons": [
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
