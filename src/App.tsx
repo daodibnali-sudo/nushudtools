@@ -304,6 +304,17 @@ function App() {
     });
   }, [syncStarted]);
 
+  const restartSync = useCallback(() => {
+    const audio = audioRef.current;
+    if (audio) {
+      audio.pause();
+      audio.currentTime = 0;
+    }
+    setCurrentTimeMs(0);
+    setIsPlaying(false);
+    resetSync(arabicLines.length);
+  }, [arabicLines.length, resetSync]);
+
   const startSync = useCallback(() => {
     if (hasBlockingErrors) {
       addRuntimeWarning("Cannot start sync until the required files are valid.");
@@ -429,6 +440,7 @@ function App() {
             onSeek={seekAudio}
             onMarkFirstLineStart={markFirstLineStart}
             onUndo={undoTimestamp}
+            onRestart={restartSync}
           />
           <SyncPreview
             arabicLines={arabicLines}

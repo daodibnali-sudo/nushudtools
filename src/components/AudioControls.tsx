@@ -16,6 +16,7 @@ type AudioControlsProps = {
   onSeek: (deltaMs: number) => void;
   onMarkFirstLineStart: () => void;
   onUndo: () => void;
+  onRestart: () => void;
 };
 
 export function AudioControls({
@@ -33,6 +34,7 @@ export function AudioControls({
   onSeek,
   onMarkFirstLineStart,
   onUndo,
+  onRestart,
 }: AudioControlsProps) {
   return (
     <section className="panel controls-panel">
@@ -63,6 +65,9 @@ export function AudioControls({
         </button>
         <button type="button" onClick={onUndo} disabled={!syncStarted}>
           Undo
+        </button>
+        <button type="button" onClick={onRestart} disabled={totalLines === 0 && !audioUrl}>
+          Restart
         </button>
         <button type="button" onClick={onMarkFirstLineStart} disabled={!syncStarted}>
           Mark First Line Start
