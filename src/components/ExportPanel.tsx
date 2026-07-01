@@ -4,10 +4,12 @@ import { makeDownloadName } from "../utils/exportJson";
 type ExportPanelProps = {
   contentJson: NushudContentJson | null;
   warnings: ValidationMessage[];
+  contentJsonSource: "generated" | "imported";
+  continueMessage: string;
   onContinue: () => void;
 };
 
-export function ExportPanel({ contentJson, warnings, onContinue }: ExportPanelProps) {
+export function ExportPanel({ contentJson, warnings, contentJsonSource, continueMessage, onContinue }: ExportPanelProps) {
   const jsonText = contentJson ? JSON.stringify(contentJson, null, 2) : "";
 
   const copyJson = async () => {
@@ -31,7 +33,7 @@ export function ExportPanel({ contentJson, warnings, onContinue }: ExportPanelPr
     <section className="panel export-panel">
       <div className="panel-heading">
         <h2>Export</h2>
-        <p>One clean JSON file</p>
+        <p>{contentJsonSource === "imported" ? "Imported timed JSON" : "One clean JSON file"}</p>
       </div>
       {warnings.length > 0 && (
         <div className="message-list">
@@ -53,6 +55,7 @@ export function ExportPanel({ contentJson, warnings, onContinue }: ExportPanelPr
           Continue
         </button>
       </div>
+      {continueMessage && <p className="status-text warning-text">{continueMessage}</p>}
       <textarea readOnly value={jsonText} placeholder="JSON output will appear here." />
     </section>
   );

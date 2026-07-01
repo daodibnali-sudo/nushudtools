@@ -117,6 +117,12 @@ label {
   font-weight: 800;
 }
 
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
 .view-tabs {
   display: flex;
   flex: 0 0 auto;
@@ -191,6 +197,10 @@ label {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.three-column {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .file-box {
   min-height: 8rem;
   border: 1px dashed #2a2a2a;
@@ -198,6 +208,10 @@ label {
   background: #111111;
   padding: 1rem;
   align-content: space-between;
+}
+
+.compact-file-box {
+  min-height: 6rem;
 }
 
 .drop-zone {
@@ -456,9 +470,40 @@ kbd {
   display: block;
 }
 
+.existing-json-preview {
+  margin-top: 1rem;
+}
+
 .admin-upload-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   margin-top: 1rem;
+}
+
+.dictionary-builder {
+  display: grid;
+  gap: 1rem;
+  margin-top: 1rem;
+  border-top: 1px solid #2a2a2a;
+  padding-top: 1rem;
+}
+
+.word-editor-list {
+  display: grid;
+  gap: 0.75rem;
+  max-height: 38rem;
+  overflow: auto;
+  padding-right: 0.25rem;
+}
+
+.word-editor-item {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1.35fr repeat(5, minmax(0, 0.8fr));
+  gap: 0.65rem;
+  align-items: end;
+  border: 1px solid #2a2a2a;
+  border-radius: 8px;
+  background: #111111;
+  padding: 0.75rem;
 }
 
 .badge {
@@ -483,14 +528,139 @@ kbd {
   white-space: pre-wrap;
 }
 
+.dictionary-catalog {
+  display: grid;
+  gap: 1rem;
+}
+
+.dictionary-panel {
+  min-height: 34rem;
+}
+
+.dictionary-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 1rem;
+  align-items: end;
+  margin-bottom: 1rem;
+}
+
+.dictionary-layout {
+  display: grid;
+  grid-template-columns: minmax(14rem, 0.34fr) minmax(0, 1fr);
+  gap: 1rem;
+  min-height: 28rem;
+}
+
+.dictionary-list {
+  display: grid;
+  align-content: start;
+  gap: 0.4rem;
+  max-height: 36rem;
+  overflow: auto;
+  border: 1px solid #2a2a2a;
+  border-radius: 8px;
+  background: #111111;
+  padding: 0.5rem;
+}
+
+.dictionary-list-item {
+  display: grid;
+  min-height: 4rem;
+  justify-items: start;
+  gap: 0.3rem;
+  border-color: transparent;
+  background: transparent;
+  text-align: left;
+}
+
+.dictionary-list-item strong {
+  font-size: 1.1rem;
+}
+
+.dictionary-list-item span {
+  max-width: 100%;
+  overflow: hidden;
+  color: #a1a1aa;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dictionary-list-item.active {
+  border-color: rgba(201, 154, 85, 0.45);
+  background: rgba(169, 123, 61, 0.18);
+}
+
+.dictionary-editor {
+  border: 1px solid #2a2a2a;
+  border-radius: 8px;
+  background: #111111;
+  padding: 1rem;
+}
+
+.editor-actions {
+  margin-top: 1rem;
+}
+
+.dictionary-tools-panel textarea {
+  min-height: 11rem;
+  resize: vertical;
+  line-height: 1.7;
+}
+
+.dictionary-tool-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(18rem, 0.55fr);
+  gap: 1rem;
+}
+
+.dictionary-imports {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.suggestion-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.suggestion-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 1rem;
+  align-items: center;
+  border: 1px solid #2a2a2a;
+  border-radius: 8px;
+  background: #111111;
+  padding: 0.85rem;
+}
+
+.suggestion-item div:first-child {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.suggestion-item strong {
+  font-size: 1.1rem;
+}
+
+.suggestion-item span,
+.suggestion-item small {
+  color: #a1a1aa;
+}
+
 @media (max-width: 980px) {
   .app-shell {
     padding: 1rem;
   }
 
   .layout-grid,
+  .dictionary-layout,
+  .dictionary-toolbar,
+  .dictionary-tool-grid,
   .field-grid,
   .two-column,
+  .three-column,
   .upload-grid {
     grid-template-columns: 1fr;
   }
@@ -499,7 +669,26 @@ kbd {
     grid-template-columns: 1fr;
   }
 
+  .word-editor-item {
+    grid-template-columns: 1fr;
+  }
+
   .shortcut {
     grid-template-columns: 1fr;
+  }
+
+  .app-header,
+  .header-actions,
+  .suggestion-item {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .view-tabs {
+    width: 100%;
+  }
+
+  .view-tabs button {
+    flex: 1;
   }
 }

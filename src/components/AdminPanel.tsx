@@ -23,6 +23,34 @@ type LyricsMetadata = {
   languages: string[];
 };
 
+type DictionaryEntry = {
+  word: string;
+  baseWord?: string;
+  meaning: string[];
+  root?: string;
+  wazn?: string;
+  forms?: string;
+  bab?: string;
+  partOfSpeech?: string;
+  translations?: unknown;
+  similars?: unknown;
+  similar?: unknown;
+  [key: string]: unknown;
+};
+
+type Dictionary = Record<string, DictionaryEntry>;
+type WordContext = {
+  word: string;
+  normalizedWord: string;
+  lines: Array<{
+    ar: string;
+    en?: string;
+  }>;
+};
+
+const dictionaryBucket = "dictionary";
+const dictionaryPath = "words.json";
+
 export function AdminPanel({
   supabase,
   adminEmail,
@@ -31,7 +59,8 @@ export function AdminPanel({
   onBack,
 }: AdminPanelProps) {
   const [coverFile, setCoverFile] = useState<File | null>(null);
-  const [dictionaryFile, setDictionaryFile] = useState<File | null>(null);
+  const [newWordEntries, setNewWordEntries] = useState<DictionaryEntry[]>([]);
+  const [isFillingWords, setIsFillingWords] = useState(false);
   const [publishState, setPublishState] = useState("Draft");
   const [log, setLog] = useState("Ready.");
 
@@ -56,6 +85,56 @@ export function AdminPanel({
     setLog(`[${new Date().toLocaleTimeString()}] ${message}`);
   };
 
+  const updateNewWordEntry = (index: number, patch: Partial<DictionaryEntry>) => {
+    setNewWordEntries((entries) =>
+      entries.map((entry, entryIndex) => (entryIndex === index ? { ...entry, ...patch } : entry)),
+    );
+  };
+
+  const findNewWords = async () => {
+    try {
+      const existingDictionary = await downloadDictionary(supabase);
+      const missingWords = getMissingDictionaryWords(generatedContentJson, existingDictionary);
+
+      setNewWordEntries((current) => {
+        const currentByKey = new Map(current.map((entry) => [normalizeArabicWord(entry.word), entry]));
+        return missingWords.map((word) => currentByKey.get(word) ?? createDraftEntry(word));
+      });
+
+      writeLog(
+        missingWords.length > 0
+          ? `Found ${missingWords.length} new words that need dictionary entries.`
+          : "No new dictionary words found for this nasheed.",
+      );
+    } catch (error) {
+      writeLog(error instanceof Error ? error.message : "Could not find new words.");
+    }
+  };
+
+  const fillWordsWithAi = async () => {
+    try {
+      if (newWordEntries.length === 0) {
+        throw new Error("Find new words first.");
+      }
+
+      setIsFillingWords(true);
+      const filledEntries = await requestAiDictionaryEntries(
+        supabase,
+        buildWordContexts(generatedContentJson, newWordEntries.map((entry) => entry.word)),
+      );
+
+      const filledByKey = new Map(filledEntries.map((entry) => [normalizeArabicWord(entry.word), entry]));
+      setNewWordEntries((current) =>
+        current.map((entry) => filledByKey.get(normalizeArabicWord(entry.word)) ?? entry),
+      );
+      writeLog(`AI filled ${filledEntries.length} dictionary entries. Review them before publishing.`);
+    } catch (error) {
+      writeLog(error instanceof Error ? error.message : "AI fill failed.");
+    } finally {
+      setIsFillingWords(false);
+    }
+  };
+
   const validateFiles = async () => {
     try {
       validateLyricsJson(generatedContentJson);
@@ -65,20 +144,17 @@ export function AdminPanel({
         throw new Error("Choose cover image first.");
       }
 
-      if (!dictionaryFile) {
-        throw new Error("Choose words.json first.");
-      }
-
-      const dictionary = await readJsonFile(dictionaryFile, "words.json");
-      validateDictionaryJson(dictionary);
+      const existingDictionary = await downloadDictionary(supabase);
+      const newWords = dictionaryFromEntries(newWordEntries);
+      const dictionary = mergeDictionaries(existingDictionary, newWords);
       const missingWords = getMissingDictionaryWords(generatedContentJson, dictionary);
 
       if (missingWords.length > 0) {
-        writeLog(`Validation passed with dictionary warnings. Missing words: ${formatMissingWords(missingWords)}`);
+        writeLog(`Still missing dictionary entries after merge: ${formatMissingWords(missingWords)}`);
         return;
       }
 
-      writeLog("Validation passed.");
+      writeLog(`Validation passed. ${Object.keys(newWords).length} new word entries will be merged into ${dictionaryPath}.`);
     } catch (error) {
       writeLog(error instanceof Error ? error.message : "Validation failed.");
     }
@@ -93,19 +169,16 @@ export function AdminPanel({
         throw new Error("Choose cover image first.");
       }
 
-      if (!dictionaryFile) {
-        throw new Error("Choose words.json first.");
-      }
-
-      const dictionary = await readJsonFile(dictionaryFile, "words.json");
-      validateDictionaryJson(dictionary);
+      const existingDictionary = await downloadDictionary(supabase);
+      const newWords = dictionaryFromEntries(newWordEntries);
+      const dictionary = mergeDictionaries(existingDictionary, newWords);
       const missingWords = getMissingDictionaryWords(generatedContentJson, dictionary);
 
       if (missingWords.length > 0) {
-        writeLog(`Publishing with missing dictionary entries: ${formatMissingWords(missingWords)}`);
+        throw new Error(`Still missing dictionary entries after merge: ${formatMissingWords(missingWords)}`);
       }
 
-      await uploadFile(supabase, "dictionary", "words.json", dictionaryFile);
+      await uploadDictionary(supabase, dictionary);
 
       const lyricsUploadFile = jsonToFile(generatedContentJson, makeDownloadName(lyricsMetadata.title));
       const coverUrl = await uploadFile(
@@ -175,16 +248,86 @@ export function AdminPanel({
             <input type="file" accept="image/*" onChange={(event) => setCoverFile(event.target.files?.[0] ?? null)} />
             <span>{coverFile?.name ?? "Required"}</span>
           </label>
-          <label className="file-box drop-zone">
-            Global words.json
-            <input
-              type="file"
-              accept="application/json,.json"
-              onChange={(event) => setDictionaryFile(event.target.files?.[0] ?? null)}
-            />
-            <span>{dictionaryFile?.name ?? "Required"}</span>
-          </label>
         </div>
+
+        <section className="dictionary-builder">
+          <div className="panel-heading">
+            <h2>New Words</h2>
+            <p>Detected from Arabic lines</p>
+          </div>
+          <div className="button-row admin-actions">
+            <button type="button" className="ghost-button" onClick={findNewWords}>
+              Find new words
+            </button>
+            <button type="button" className="primary-button" onClick={fillWordsWithAi} disabled={isFillingWords}>
+              {isFillingWords ? "Filling..." : "Fill with AI"}
+            </button>
+          </div>
+
+          {newWordEntries.length > 0 && (
+            <div className="word-editor-list">
+              {newWordEntries.map((entry, index) => (
+                <div className="word-editor-item" key={`${entry.word}-${index}`}>
+                  <label>
+                    Word
+                    <input value={entry.word} onChange={(event) => updateNewWordEntry(index, { word: event.target.value })} />
+                  </label>
+                  <label>
+                    Base word
+                    <input
+                      value={entry.baseWord ?? ""}
+                      onChange={(event) => updateNewWordEntry(index, { baseWord: event.target.value })}
+                      placeholder="لَيْل"
+                    />
+                  </label>
+                  <label>
+                    Meanings
+                    <input
+                      value={entry.meaning.join(", ")}
+                      onChange={(event) =>
+                        updateNewWordEntry(index, {
+                          meaning: event.target.value
+                            .split(",")
+                            .map((meaning) => meaning.trim())
+                            .filter(Boolean),
+                        })
+                      }
+                      placeholder="he wrote, to write"
+                    />
+                  </label>
+                  <label>
+                    Root
+                    <input value={entry.root ?? ""} onChange={(event) => updateNewWordEntry(index, { root: event.target.value })} />
+                  </label>
+                  <label>
+                    Wazn
+                    <input value={entry.wazn ?? ""} onChange={(event) => updateNewWordEntry(index, { wazn: event.target.value })} />
+                  </label>
+                  <label>
+                    Forms
+                    <input
+                      value={entry.forms ?? ""}
+                      onChange={(event) => updateNewWordEntry(index, { forms: event.target.value })}
+                      placeholder="طَالَ، يَطُولُ"
+                    />
+                  </label>
+                  <label>
+                    Bab
+                    <input value={entry.bab ?? ""} onChange={(event) => updateNewWordEntry(index, { bab: event.target.value })} />
+                  </label>
+                  <label>
+                    Part of speech
+                    <input
+                      value={entry.partOfSpeech ?? ""}
+                      onChange={(event) => updateNewWordEntry(index, { partOfSpeech: event.target.value })}
+                      placeholder="verb, noun, particle"
+                    />
+                  </label>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
 
         <div className="button-row admin-actions">
           <button type="button" className="ghost-button" onClick={onBack}>
@@ -223,6 +366,25 @@ async function uploadFile(supabase: SupabaseClient, bucket: string, path: string
   return supabase.storage.from(bucket).getPublicUrl(path).data.publicUrl;
 }
 
+async function downloadDictionary(supabase: SupabaseClient): Promise<Dictionary> {
+  const { data, error } = await supabase.storage.from(dictionaryBucket).download(dictionaryPath);
+
+  if (error) {
+    return {};
+  }
+
+  try {
+    return normalizeDictionaryInput(JSON.parse(await data.text()));
+  } catch {
+    throw new Error(`${dictionaryPath} exists but is not valid JSON.`);
+  }
+}
+
+async function uploadDictionary(supabase: SupabaseClient, dictionary: Dictionary): Promise<void> {
+  const dictionaryFile = new File([JSON.stringify(dictionary, null, 2)], dictionaryPath, { type: "application/json" });
+  await uploadFile(supabase, dictionaryBucket, dictionaryPath, dictionaryFile);
+}
+
 async function readJsonFile(file: File, label: string): Promise<unknown> {
   if (!file) {
     throw new Error(`Choose ${label} first.`);
@@ -233,6 +395,51 @@ async function readJsonFile(file: File, label: string): Promise<unknown> {
   } catch {
     throw new Error(`${label} is not valid JSON.`);
   }
+}
+
+async function requestAiDictionaryEntries(supabase: SupabaseClient, words: WordContext[]): Promise<DictionaryEntry[]> {
+  const { data, error } = await supabase.functions.invoke("generate-dictionary-entries", {
+    body: { words },
+  });
+
+  if (error) {
+    throw new Error(`AI function failed: ${await getFunctionErrorMessage(error)}`);
+  }
+
+  const entries = (data as { entries?: unknown } | null)?.entries;
+
+  if (!Array.isArray(entries)) {
+    throw new Error("AI function response must contain an entries array.");
+  }
+
+  return entries.map((entry) => normalizeDictionaryEntry(entry));
+}
+
+async function getFunctionErrorMessage(error: unknown): Promise<string> {
+  if (!error || typeof error !== "object") {
+    return "Unknown function error.";
+  }
+
+  const record = error as { message?: unknown; context?: unknown };
+  const context = record.context;
+
+  if (context instanceof Response) {
+    try {
+      const body = (await context.clone().json()) as { error?: unknown };
+      if (typeof body.error === "string") {
+        return body.error;
+      }
+    } catch {
+      try {
+        const text = await context.clone().text();
+        if (text) return text;
+      } catch {
+        // Fall through to the generic message below.
+      }
+    }
+  }
+
+  return typeof record.message === "string" ? record.message : "Unknown function error.";
 }
 
 function validateLyricsJson(json: NushudContentJson) {
@@ -323,23 +530,118 @@ function validateSelectedAudioFile(metadata: LyricsMetadata, file: File) {
   }
 }
 
-function validateDictionaryJson(json: unknown) {
-  if (!json || typeof json !== "object" || Array.isArray(json)) {
-    throw new Error("words.json must be an object keyed by normalized word.");
+function normalizeDictionaryInput(json: unknown): Dictionary {
+  if (Array.isArray(json)) {
+    return Object.fromEntries(
+      json.map((item) => normalizeDictionaryEntry(item)).map((entry) => [normalizeArabicWord(entry.word), entry]),
+    );
   }
+
+  if (!json || typeof json !== "object") {
+    throw new Error("New words JSON must be an array of word entries or an object keyed by Arabic word.");
+  }
+
+  return Object.fromEntries(
+    Object.entries(json as Record<string, unknown>).map(([key, value]) => {
+      const entry = normalizeDictionaryEntry(value, key);
+      return [normalizeArabicWord(entry.word || key), entry];
+    }),
+  );
 }
 
-function getMissingDictionaryWords(lyrics: NushudContentJson, dictionary: unknown): string[] {
+function dictionaryFromEntries(entries: DictionaryEntry[]): Dictionary {
+  return Object.fromEntries(
+    entries.map((item) => normalizeDictionaryEntry(item)).map((entry) => [normalizeArabicWord(entry.word), entry]),
+  );
+}
+
+function createDraftEntry(word: string): DictionaryEntry {
+  return {
+    word,
+    baseWord: "",
+    meaning: [],
+    root: "",
+    wazn: "",
+    forms: "",
+    bab: "",
+    partOfSpeech: "",
+  };
+}
+
+function normalizeDictionaryEntry(value: unknown, fallbackWord = ""): DictionaryEntry {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Each dictionary entry must be an object.");
+  }
+
+  const record = value as Record<string, unknown>;
+  const word = String(record.word ?? fallbackWord).trim();
+  const meaning = Array.isArray(record.meaning)
+    ? record.meaning.map((item) => String(item).trim()).filter(Boolean)
+    : typeof record.meaning === "string"
+      ? [record.meaning.trim()].filter(Boolean)
+      : [];
+
+  if (!word) {
+    throw new Error("Each dictionary entry needs a word.");
+  }
+
+  if (meaning.length === 0) {
+    throw new Error(`${word} needs at least one meaning.`);
+  }
+
+  return {
+    ...record,
+    word,
+    baseWord: typeof record.baseWord === "string" ? record.baseWord : undefined,
+    meaning,
+    root: typeof record.root === "string" ? record.root : undefined,
+    wazn: typeof record.wazn === "string" ? record.wazn : undefined,
+    forms: typeof record.forms === "string" ? record.forms : undefined,
+    bab: typeof record.bab === "string" ? record.bab : undefined,
+    partOfSpeech: typeof record.partOfSpeech === "string" ? record.partOfSpeech : undefined,
+  };
+}
+
+function mergeDictionaries(existingDictionary: Dictionary, newWords: Dictionary): Dictionary {
+  return {
+    ...existingDictionary,
+    ...newWords,
+  };
+}
+
+function getMissingDictionaryWords(lyrics: NushudContentJson, dictionary: Dictionary): string[] {
   const missing = new Set<string>();
-  const dictionaryRecord = dictionary as Record<string, unknown>;
 
   getNormalizedWordsFromLyrics(lyrics).forEach((normalizedWord) => {
-    if (!dictionaryRecord[normalizedWord]) {
+    if (!dictionary[normalizedWord]) {
       missing.add(normalizedWord);
     }
   });
 
   return [...missing];
+}
+
+function buildWordContexts(lyrics: NushudContentJson, words: string[]): WordContext[] {
+  const contexts = new Map<string, WordContext>();
+
+  words.forEach((word) => {
+    const normalizedWord = normalizeArabicWord(word);
+    contexts.set(normalizedWord, { word, normalizedWord, lines: [] });
+  });
+
+  lyrics.lines.forEach((line) => {
+    const lineWords = new Set(tokenizeArabicLine(line.ar).map(normalizeArabicWord));
+    contexts.forEach((context, normalizedWord) => {
+      if (lineWords.has(normalizedWord) && context.lines.length < 3) {
+        context.lines.push({
+          ar: line.ar,
+          en: typeof line.en === "string" ? line.en : undefined,
+        });
+      }
+    });
+  });
+
+  return [...contexts.values()];
 }
 
 function formatMissingWords(words: string[]): string {
@@ -365,19 +667,20 @@ function tokenizeArabicLine(text: string): string[] {
 }
 
 function normalizeArabicWord(text: string): string {
-  return text
+  const withoutMarks = text
     .normalize("NFKD")
     .replace(/[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06ED]/g, "")
-    .replace(/\u0640/g, "")
-    .replace(/[إأٱآ]/g, "ا")
-    .replace(/ى/g, "ي")
-    .replace(/ؤ/g, "و")
-    .replace(/ئ/g, "ي")
-    .replace(/ة/g, "ه")
+    .replace(/\u0640/g, "");
+
+  return withoutMarks
+    .replace(/[\u0625\u0623\u0671\u0622]/g, "\u0627")
+    .replace(/\u0649/g, "\u064A")
+    .replace(/\u0624/g, "\u0648")
+    .replace(/\u0626/g, "\u064A")
+    .replace(/\u0629/g, "\u0647")
     .replace(/[^\p{Script=Arabic}\p{Letter}\p{Number}]+/gu, "")
     .trim();
 }
-
 function isValidTiming(startMs: unknown, endMs: unknown): boolean {
   return Number.isFinite(startMs) && Number.isFinite(endMs) && Number(startMs) >= 0 && Number(endMs) > Number(startMs);
 }

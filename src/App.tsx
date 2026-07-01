@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { AdminPanel } from "./components/AdminPanel";
 import { AudioControls } from "./components/AudioControls";
+import { DictionaryPanel } from "./components/DictionaryPanel";
+import { ExistingJsonPanel } from "./components/ExistingJsonPanel";
 import { ExportPanel } from "./components/ExportPanel";
 import { Header } from "./components/Header";
 import { MetadataPanel } from "./components/MetadataPanel";
@@ -10,7 +12,7 @@ import { ShortcutHelp } from "./components/ShortcutHelp";
 import { SyncPreview } from "./components/SyncPreview";
 import { UploadPanel } from "./components/UploadPanel";
 import { ValidationPanel } from "./components/ValidationPanel";
-import type { Metadata, UploadedTextFile, ValidationMessage } from "./types";
+import type { Metadata, NushudContentJson, UploadedTextFile, ValidationMessage } from "./types";
 import { buildContentJson } from "./utils/exportJson";
 import { parseTextLines } from "./utils/parseTextFile";
 
@@ -34,7 +36,7 @@ function isTypingTarget(target: EventTarget | null): boolean {
 
 function App() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const [workflowStep, setWorkflowStep] = useState<"checking" | "setup" | "sync" | "publish">("checking");
+  const [workflowStep, setWorkflowStep] = useState<"checking" | "setup" | "sync" | "publish" | "dictionary">("checking");
   const [supabase, setSupabase] = useState<SupabaseClient | null>(null);
   const [adminEmail, setAdminEmail] = useState("");
   const [metadata, setMetadata] = useState<Metadata>({
@@ -58,6 +60,10 @@ function App() {
   const [currentTimeMs, setCurrentTimeMs] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [runtimeWarnings, setRuntimeWarnings] = useState<ValidationMessage[]>([]);
+  const [existingJsonFileName, setExistingJsonFileName] = useState("");
+  const [existingContentJson, setExistingContentJson] = useState<NushudContentJson | null>(null);
+  const [existingJsonError, setExistingJsonError] = useState("");
+  const [continueMessage, setContinueMessage] = useState("");
 
   useEffect(() => {
     const restoreSession = async () => {
@@ -197,6 +203,26 @@ function App() {
     },
     [arabicSourceText, resetSync],
   );
+
+  const loadExistingJson = useCallback(async (file: File | null) => {
+    setExistingJsonFileName(file?.name ?? "");
+    setExistingJsonError("");
+    setContinueMessage("");
+
+    if (!file) {
+      setExistingContentJson(null);
+      return;
+    }
+
+    try {
+      const json = JSON.parse(await file.text()) as NushudContentJson;
+      validateExistingContentJson(json);
+      setExistingContentJson(json);
+    } catch (error) {
+      setExistingContentJson(null);
+      setExistingJsonError(error instanceof Error ? error.message : "Existing JSON is not valid.");
+    }
+  }, []);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -429,6 +455,7 @@ function App() {
   }, [arabicLines.length, firstLineStartMs, timestamps, translations, validationMessages]);
 
   const contentJson = useMemo(() => {
+    if (existingContentJson) return existingContentJson;
     if (!audioFile || arabicLines.length === 0) return null;
 
     return buildContentJson({
@@ -439,11 +466,48 @@ function App() {
       timestamps,
       firstLineStartMs: firstLineStartMs ?? 0,
     });
-  }, [arabicLines, audioFile, firstLineStartMs, metadata, timestamps, translations]);
+  }, [arabicLines, audioFile, existingContentJson, firstLineStartMs, metadata, timestamps, translations]);
+
+  const contentJsonSource = existingContentJson ? "imported" : "generated";
+
+  const continueToPublish = useCallback(() => {
+    setContinueMessage("");
+
+    if (!contentJson) {
+      setContinueMessage("Create or import a timed lyrics JSON first.");
+      return;
+    }
+
+    if (!audioFile) {
+      setContinueMessage("Select the audio file before continuing. The JSON is ready, but the app still needs the MP3 to upload.");
+      return;
+    }
+
+    if (contentJson.audioFileName && audioFile.name !== contentJson.audioFileName) {
+      setContinueMessage(`Selected audio does not match JSON. JSON expects ${contentJson.audioFileName}, selected ${audioFile.name}.`);
+      return;
+    }
+
+    setWorkflowStep("publish");
+  }, [audioFile, contentJson]);
 
   return (
     <main className="app-shell">
-      <Header />
+      <Header
+        currentView={
+          workflowStep === "sync" || workflowStep === "publish" || workflowStep === "dictionary"
+            ? workflowStep
+            : undefined
+        }
+        onNavigate={
+          supabase
+            ? (view) => {
+                setContinueMessage("");
+                setWorkflowStep(view);
+              }
+            : undefined
+        }
+      />
       {workflowStep === "checking" && (
         <section className="panel setup-panel">
           <div className="panel-heading">
@@ -465,6 +529,21 @@ function App() {
       {workflowStep === "sync" && (
         <div className="layout-grid">
           <div className="main-column">
+            <ExistingJsonPanel
+              existingJsonFileName={existingJsonFileName}
+              existingJson={existingContentJson}
+              onJsonUpload={loadExistingJson}
+              onClear={() => {
+                setExistingJsonFileName("");
+                setExistingContentJson(null);
+                setExistingJsonError("");
+              }}
+            />
+            {existingJsonError && (
+              <section className="panel">
+                <div className="message error">{existingJsonError}</div>
+              </section>
+            )}
             <MetadataPanel metadata={metadata} onChange={setMetadata} />
             <UploadPanel
               audioFile={audioFile}
@@ -515,7 +594,13 @@ function App() {
           </div>
           <aside className="side-column">
             <ShortcutHelp />
-            <ExportPanel contentJson={contentJson} warnings={exportWarnings} onContinue={() => setWorkflowStep("publish")} />
+            <ExportPanel
+              contentJson={contentJson}
+              warnings={exportWarnings}
+              contentJsonSource={contentJsonSource}
+              continueMessage={continueMessage}
+              onContinue={continueToPublish}
+            />
           </aside>
         </div>
       )}
@@ -528,6 +613,7 @@ function App() {
           onBack={() => setWorkflowStep("sync")}
         />
       )}
+      {workflowStep === "dictionary" && supabase && <DictionaryPanel supabase={supabase} adminEmail={adminEmail} />}
     </main>
   );
 }
@@ -541,6 +627,30 @@ function readConfig(): { url: string; anonKey: string } | null {
   } catch {
     return null;
   }
+}
+
+function validateExistingContentJson(json: NushudContentJson) {
+  if (!json || typeof json !== "object") {
+    throw new Error("JSON file must contain an object.");
+  }
+
+  if (!json.id || !json.title || !json.artist) {
+    throw new Error("JSON needs id, title, and artist.");
+  }
+
+  if (!Array.isArray(json.lines) || json.lines.length === 0) {
+    throw new Error("JSON needs a non-empty lines array.");
+  }
+
+  json.lines.forEach((line, index) => {
+    if (typeof line.ar !== "string" || !line.ar.trim()) {
+      throw new Error(`Line ${index + 1} needs ar.`);
+    }
+
+    if (!Number.isFinite(line.startMs) || line.endMs !== null && !Number.isFinite(line.endMs)) {
+      throw new Error(`Line ${index + 1} has invalid timing.`);
+    }
+  });
 }
 
 export default App;
