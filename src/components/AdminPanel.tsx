@@ -17,6 +17,8 @@ type LyricsMetadata = {
   slug: string;
   title: string;
   artistName: string;
+  difficulty: NushudContentJson["difficulty"];
+  tags: string[];
   audioFileName: string;
   durationMs: number;
   lineCount: number;
@@ -33,8 +35,6 @@ export function AdminPanel({ generatedContentJson, generatedAudioFile }: AdminPa
   const [password, setPassword] = useState("");
   const [adminEmail, setAdminEmail] = useState("");
   const [isAdmin, setIsAdmin] = useState(false);
-  const [difficulty, setDifficulty] = useState("beginner");
-  const [tags, setTags] = useState("");
   const [coverFile, setCoverFile] = useState<File | null>(null);
   const [audioFile, setAudioFile] = useState<File | null>(null);
   const [lyricsFile, setLyricsFile] = useState<File | null>(null);
@@ -101,6 +101,8 @@ export function AdminPanel({ generatedContentJson, generatedAudioFile }: AdminPa
       lyricsMetadata.title,
       `Slug: ${lyricsMetadata.slug}`,
       `Artist: ${lyricsMetadata.artistName}`,
+      `Difficulty: ${lyricsMetadata.difficulty}`,
+      lyricsMetadata.tags.length > 0 ? `Tags: ${lyricsMetadata.tags.join(", ")}` : "Tags: none",
       `Duration: ${lyricsMetadata.durationMs} ms`,
       `Lines: ${lyricsMetadata.lineCount}`,
       lyricsMetadata.audioFileName ? `Expected audio: ${lyricsMetadata.audioFileName}` : "",
@@ -239,11 +241,8 @@ export function AdminPanel({ generatedContentJson, generatedAudioFile }: AdminPa
         audio_url: audioUrl,
         lyrics_json_url: lyricsJsonUrl,
         duration_ms: metadata.durationMs,
-        difficulty,
-        tags: tags
-          .split(",")
-          .map((tag) => tag.trim().toLowerCase())
-          .filter(Boolean),
+        difficulty: metadata.difficulty,
+        tags: metadata.tags,
         total_words: normalizedWords.length,
         new_words_count: new Set(normalizedWords).size,
         is_published: true,
@@ -349,21 +348,6 @@ export function AdminPanel({ generatedContentJson, generatedAudioFile }: AdminPa
           ) : (
             <span>{metadataPreview}</span>
           )}
-        </div>
-
-        <div className="field-grid two-column">
-          <label>
-            Difficulty
-            <select value={difficulty} onChange={(event) => setDifficulty(event.target.value)}>
-              <option value="beginner">beginner</option>
-              <option value="intermediate">intermediate</option>
-              <option value="advanced">advanced</option>
-            </select>
-          </label>
-          <label>
-            Tags
-            <input value={tags} onChange={(event) => setTags(event.target.value)} placeholder="warrior, romantic, slow" />
-          </label>
         </div>
 
         <div className="upload-grid admin-upload-grid">
@@ -482,6 +466,8 @@ function getLyricsMetadata(json: NushudContentJson): LyricsMetadata {
   const slug = String(record.id ?? record.slug ?? "").trim();
   const title = String(record.title ?? "").trim();
   const artistName = String(record.artist ?? record.artistName ?? record.author ?? record.authorName ?? "").trim();
+  const difficulty = getDifficulty(record.difficulty);
+  const tags = getTags(record.tags);
   const audioFileName = String(record.audioFileName ?? record.audio_file_name ?? "").trim();
   const durationMs = getDurationMs(json);
 
@@ -500,6 +486,8 @@ function getLyricsMetadata(json: NushudContentJson): LyricsMetadata {
     slug,
     title,
     artistName,
+    difficulty,
+    tags,
     audioFileName,
     durationMs,
     lineCount: json.lines.length,
@@ -517,6 +505,18 @@ function getDurationMs(json: NushudContentJson): number {
 
   const maxEndMs = Math.max(...json.lines.map((line) => Number(line.endMs)));
   return Number.isFinite(maxEndMs) && maxEndMs > 0 ? Math.round(maxEndMs) : 0;
+}
+
+function getDifficulty(value: unknown): NushudContentJson["difficulty"] {
+  return value === "intermediate" || value === "advanced" ? value : "beginner";
+}
+
+function getTags(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.map((tag) => String(tag).trim().toLowerCase()).filter(Boolean);
 }
 
 function validateSelectedAudioFile(metadata: LyricsMetadata, file: File) {

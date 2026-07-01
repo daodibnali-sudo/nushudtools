@@ -18,12 +18,16 @@ export type Metadata = {
   id: string;
   title: string;
   artist: string;
+  difficulty: "beginner" | "intermediate" | "advanced";
+  tags: string;
 };
 
 export type NushudContentJson = {
   id: string;
   title: string;
   artist: string;
+  difficulty: "beginner" | "intermediate" | "advanced";
+  tags: string[];
   audioFileName: string;
   lineCount: number;
   languages: string[];

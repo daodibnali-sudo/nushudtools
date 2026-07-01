@@ -51,6 +51,11 @@ export function buildContentJson({
     id: metadata.id.trim(),
     title: metadata.title.trim(),
     artist: metadata.artist.trim(),
+    difficulty: metadata.difficulty,
+    tags: metadata.tags
+      .split(",")
+      .map((tag) => tag.trim().toLowerCase())
+      .filter(Boolean),
     audioFileName,
     lineCount: arabicLines.length,
     languages,

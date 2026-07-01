@@ -32,7 +32,13 @@ function isTypingTarget(target: EventTarget | null): boolean {
 function App() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [currentView, setCurrentView] = useState<"sync" | "admin">("sync");
-  const [metadata, setMetadata] = useState<Metadata>({ id: "", title: "", artist: "" });
+  const [metadata, setMetadata] = useState<Metadata>({
+    id: "",
+    title: "",
+    artist: "",
+    difficulty: "beginner",
+    tags: "",
+  });
   const [audioFile, setAudioFile] = useState<File | null>(null);
   const [audioUrl, setAudioUrl] = useState("");
   const [arabicFileName, setArabicFileName] = useState("");
