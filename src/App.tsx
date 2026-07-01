@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AdminPanel } from "./components/AdminPanel";
 import { AudioControls } from "./components/AudioControls";
 import { ExportPanel } from "./components/ExportPanel";
 import { Header } from "./components/Header";
@@ -30,6 +31,7 @@ function isTypingTarget(target: EventTarget | null): boolean {
 
 function App() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [currentView, setCurrentView] = useState<"sync" | "admin">("sync");
   const [metadata, setMetadata] = useState<Metadata>({ id: "", title: "", artist: "" });
   const [audioFile, setAudioFile] = useState<File | null>(null);
   const [audioUrl, setAudioUrl] = useState("");
@@ -398,62 +400,66 @@ function App() {
 
   return (
     <main className="app-shell">
-      <Header />
-      <div className="layout-grid">
-        <div className="main-column">
-          <MetadataPanel metadata={metadata} onChange={setMetadata} />
-          <UploadPanel
-            audioFile={audioFile}
-            arabicFileName={arabicFileName}
-            arabicText={arabicSourceText}
-            translations={translations}
-            keepEmptyLines={keepEmptyLines}
-            onAudioUpload={setAudioFile}
-            onArabicUpload={loadArabicFile}
-            onArabicTextChange={loadArabicText}
-            onTranslationsUpload={loadTranslationFiles}
-            onAddPastedTranslation={addPastedTranslation}
-            onTranslationLanguageChange={(id, languageCode) =>
-              setTranslations((files) =>
-                files.map((file) => (file.id === id ? { ...file, languageCode: languageCode.trim() } : file)),
-              )
-            }
-            onTranslationTextChange={updateTranslationSourceText}
-            onRemoveTranslation={(id) => {
-              setTranslations((files) => files.filter((file) => file.id !== id));
-            }}
-            onKeepEmptyLinesChange={changeKeepEmptyLines}
-          />
-          <ValidationPanel messages={[...validationMessages, ...runtimeWarnings]} />
-          <AudioControls
-            audioRef={audioRef}
-            audioUrl={audioUrl}
-            currentTimeMs={currentTimeMs}
-            isPlaying={isPlaying}
-            currentLine={currentLine}
-            totalLines={arabicLines.length}
-            syncStarted={syncStarted}
-            firstLineStartMs={firstLineStartMs}
-            canStart={!hasBlockingErrors}
-            onStartSync={startSync}
-            onTogglePlay={togglePlay}
-            onSeek={seekAudio}
-            onMarkFirstLineStart={markFirstLineStart}
-            onUndo={undoTimestamp}
-            onRestart={restartSync}
-          />
-          <SyncPreview
-            arabicLines={arabicLines}
-            translations={translations}
-            currentLine={currentLine}
-            timestamps={timestamps}
-          />
+      <Header currentView={currentView} onViewChange={setCurrentView} />
+      {currentView === "sync" ? (
+        <div className="layout-grid">
+          <div className="main-column">
+            <MetadataPanel metadata={metadata} onChange={setMetadata} />
+            <UploadPanel
+              audioFile={audioFile}
+              arabicFileName={arabicFileName}
+              arabicText={arabicSourceText}
+              translations={translations}
+              keepEmptyLines={keepEmptyLines}
+              onAudioUpload={setAudioFile}
+              onArabicUpload={loadArabicFile}
+              onArabicTextChange={loadArabicText}
+              onTranslationsUpload={loadTranslationFiles}
+              onAddPastedTranslation={addPastedTranslation}
+              onTranslationLanguageChange={(id, languageCode) =>
+                setTranslations((files) =>
+                  files.map((file) => (file.id === id ? { ...file, languageCode: languageCode.trim() } : file)),
+                )
+              }
+              onTranslationTextChange={updateTranslationSourceText}
+              onRemoveTranslation={(id) => {
+                setTranslations((files) => files.filter((file) => file.id !== id));
+              }}
+              onKeepEmptyLinesChange={changeKeepEmptyLines}
+            />
+            <ValidationPanel messages={[...validationMessages, ...runtimeWarnings]} />
+            <AudioControls
+              audioRef={audioRef}
+              audioUrl={audioUrl}
+              currentTimeMs={currentTimeMs}
+              isPlaying={isPlaying}
+              currentLine={currentLine}
+              totalLines={arabicLines.length}
+              syncStarted={syncStarted}
+              firstLineStartMs={firstLineStartMs}
+              canStart={!hasBlockingErrors}
+              onStartSync={startSync}
+              onTogglePlay={togglePlay}
+              onSeek={seekAudio}
+              onMarkFirstLineStart={markFirstLineStart}
+              onUndo={undoTimestamp}
+              onRestart={restartSync}
+            />
+            <SyncPreview
+              arabicLines={arabicLines}
+              translations={translations}
+              currentLine={currentLine}
+              timestamps={timestamps}
+            />
+          </div>
+          <aside className="side-column">
+            <ShortcutHelp />
+            <ExportPanel contentJson={contentJson} warnings={exportWarnings} />
+          </aside>
         </div>
-        <aside className="side-column">
-          <ShortcutHelp />
-          <ExportPanel contentJson={contentJson} warnings={exportWarnings} />
-        </aside>
-      </div>
+      ) : (
+        <AdminPanel generatedContentJson={contentJson} generatedAudioFile={audioFile} />
+      )}
     </main>
   );
 }

@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>NUSHUD Admin</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">NUSHUD</p>
+          <h1>Admin</h1>
+        </div>
+        <button id="signOutButton" class="ghost hidden" type="button">Sign out</button>
+      </header>
+
+      <section id="configPanel" class="panel">
+        <h2>Connect Supabase</h2>
+        <p class="muted">These values stay in this browser only. Use the public anon key, never the service role key.</p>
+        <label>
+          Supabase URL
+          <input id="supabaseUrl" type="url" autocomplete="off" placeholder="https://your-project.supabase.co" />
+        </label>
+        <label>
+          Supabase anon key
+          <input id="supabaseAnonKey" type="password" autocomplete="off" placeholder="ey..." />
+        </label>
+        <button id="saveConfigButton" type="button">Save connection</button>
+      </section>
+
+      <section id="loginPanel" class="panel hidden">
+        <h2>Login</h2>
+        <p class="muted">Your user must be listed in the `admin_users` table.</p>
+        <label>
+          Email
+          <input id="email" type="email" autocomplete="email" />
+        </label>
+        <label>
+          Password
+          <input id="password" type="password" autocomplete="current-password" />
+        </label>
+        <button id="loginButton" type="button">Login</button>
+      </section>
+
+      <section id="adminPanel" class="panel hidden">
+        <div class="sectionHeader">
+          <div>
+            <h2>Publish Nasheed</h2>
+            <p id="adminEmail" class="muted"></p>
+          </div>
+          <span id="publishState" class="badge">Draft</span>
+        </div>
+
+        <div id="metadataPreview" class="metadataPreview">
+          Choose timed lyrics JSON to detect slug, title, artist, audio filename, line count, and duration.
+        </div>
+
+        <div class="grid compactGrid">
+          <label>
+            Difficulty
+            <select id="difficulty">
+              <option value="beginner">beginner</option>
+              <option value="intermediate">intermediate</option>
+              <option value="advanced">advanced</option>
+            </select>
+          </label>
+          <label>
+            Tags
+            <input id="tags" type="text" placeholder="warrior, romantic, slow" />
+          </label>
+        </div>
+
+        <div class="uploads">
+          <label>
+            Cover image
+            <input id="coverFile" type="file" accept="image/*" />
+          </label>
+          <label>
+            Audio file
+            <input id="audioFile" type="file" accept="audio/*" />
+          </label>
+          <label>
+            Timed lyrics JSON
+            <input id="lyricsFile" type="file" accept="application/json,.json" />
+          </label>
+          <label>
+            Global words.json
+            <input id="dictionaryFile" type="file" accept="application/json,.json" />
+          </label>
+        </div>
+
+        <div class="actions">
+          <button id="validateButton" class="secondary" type="button">Validate files</button>
+          <button id="publishButton" type="button">Upload and publish</button>
+        </div>
+      </section>
+
+      <section class="panel logPanel">
+        <h2>Status</h2>
+        <pre id="log">Ready.</pre>
+      </section>
+    </main>
+
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>
