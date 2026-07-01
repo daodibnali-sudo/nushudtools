@@ -1,31 +1,11 @@
-type HeaderProps = {
-  currentView: "sync" | "admin";
-  onViewChange: (view: "sync" | "admin") => void;
-};
-
-export function Header({ currentView, onViewChange }: HeaderProps) {
+export function Header() {
   return (
     <header className="app-header">
       <div>
-        <p className="eyebrow">Local browser workflow</p>
-        <h1>NUSHUD Tools</h1>
+        <p className="eyebrow">Private publishing workflow</p>
+        <h1>NUSHUD Tool</h1>
       </div>
-      <nav className="view-tabs" aria-label="NUSHUD tool sections">
-        <button
-          type="button"
-          className={currentView === "sync" ? "active" : ""}
-          onClick={() => onViewChange("sync")}
-        >
-          Sync
-        </button>
-        <button
-          type="button"
-          className={currentView === "admin" ? "active" : ""}
-          onClick={() => onViewChange("admin")}
-        >
-          Admin
-        </button>
-      </nav>
+      <div className="header-mark">NT</div>
     </header>
   );
 }

@@ -4,9 +4,10 @@ import { makeDownloadName } from "../utils/exportJson";
 type ExportPanelProps = {
   contentJson: NushudContentJson | null;
   warnings: ValidationMessage[];
+  onContinue: () => void;
 };
 
-export function ExportPanel({ contentJson, warnings }: ExportPanelProps) {
+export function ExportPanel({ contentJson, warnings, onContinue }: ExportPanelProps) {
   const jsonText = contentJson ? JSON.stringify(contentJson, null, 2) : "";
 
   const copyJson = async () => {
@@ -47,6 +48,9 @@ export function ExportPanel({ contentJson, warnings }: ExportPanelProps) {
         </button>
         <button type="button" className="primary-button" onClick={downloadJson} disabled={!contentJson}>
           Download JSON
+        </button>
+        <button type="button" className="primary-button" onClick={onContinue} disabled={!contentJson}>
+          Continue
         </button>
       </div>
       <textarea readOnly value={jsonText} placeholder="JSON output will appear here." />

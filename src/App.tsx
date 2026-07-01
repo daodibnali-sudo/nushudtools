@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { AdminPanel } from "./components/AdminPanel";
 import { AudioControls } from "./components/AudioControls";
 import { ExportPanel } from "./components/ExportPanel";
 import { Header } from "./components/Header";
 import { MetadataPanel } from "./components/MetadataPanel";
+import { SetupPanel } from "./components/SetupPanel";
 import { ShortcutHelp } from "./components/ShortcutHelp";
 import { SyncPreview } from "./components/SyncPreview";
 import { UploadPanel } from "./components/UploadPanel";
@@ -13,6 +15,7 @@ import { buildContentJson } from "./utils/exportJson";
 import { parseTextLines } from "./utils/parseTextFile";
 
 const commonLanguageCodes = ["en", "ru", "cs", "fr", "de", "tr", "id", "ur"];
+const configStorageKey = "nushudAdminConfig";
 
 function inferLanguageCode(fileName: string, fallbackIndex: number): string {
   const lowerName = fileName.toLowerCase();
@@ -31,7 +34,9 @@ function isTypingTarget(target: EventTarget | null): boolean {
 
 function App() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const [currentView, setCurrentView] = useState<"sync" | "admin">("sync");
+  const [workflowStep, setWorkflowStep] = useState<"checking" | "setup" | "sync" | "publish">("checking");
+  const [supabase, setSupabase] = useState<SupabaseClient | null>(null);
+  const [adminEmail, setAdminEmail] = useState("");
   const [metadata, setMetadata] = useState<Metadata>({
     id: "",
     title: "",
@@ -53,6 +58,38 @@ function App() {
   const [currentTimeMs, setCurrentTimeMs] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [runtimeWarnings, setRuntimeWarnings] = useState<ValidationMessage[]>([]);
+
+  useEffect(() => {
+    const restoreSession = async () => {
+      const config = readConfig();
+
+      if (!config) {
+        setWorkflowStep("setup");
+        return;
+      }
+
+      const client = createClient(config.url, config.anonKey);
+      const { data } = await client.auth.getUser();
+
+      if (!data.user) {
+        setWorkflowStep("setup");
+        return;
+      }
+
+      const { data: adminResult, error } = await client.rpc("is_admin");
+
+      if (error || adminResult !== true) {
+        setWorkflowStep("setup");
+        return;
+      }
+
+      setSupabase(client);
+      setAdminEmail(data.user.email ?? "");
+      setWorkflowStep("sync");
+    };
+
+    void restoreSession();
+  }, []);
 
   useEffect(() => {
     if (!audioFile) {
@@ -406,8 +443,26 @@ function App() {
 
   return (
     <main className="app-shell">
-      <Header currentView={currentView} onViewChange={setCurrentView} />
-      {currentView === "sync" ? (
+      <Header />
+      {workflowStep === "checking" && (
+        <section className="panel setup-panel">
+          <div className="panel-heading">
+            <h2>Opening NUSHUD Tool</h2>
+            <p>Checking this browser session</p>
+          </div>
+          <p className="status-text">Loading saved login.</p>
+        </section>
+      )}
+      {workflowStep === "setup" && (
+        <SetupPanel
+          onReady={(client, email) => {
+            setSupabase(client);
+            setAdminEmail(email);
+            setWorkflowStep("sync");
+          }}
+        />
+      )}
+      {workflowStep === "sync" && (
         <div className="layout-grid">
           <div className="main-column">
             <MetadataPanel metadata={metadata} onChange={setMetadata} />
@@ -460,14 +515,32 @@ function App() {
           </div>
           <aside className="side-column">
             <ShortcutHelp />
-            <ExportPanel contentJson={contentJson} warnings={exportWarnings} />
+            <ExportPanel contentJson={contentJson} warnings={exportWarnings} onContinue={() => setWorkflowStep("publish")} />
           </aside>
         </div>
-      ) : (
-        <AdminPanel generatedContentJson={contentJson} generatedAudioFile={audioFile} />
+      )}
+      {workflowStep === "publish" && supabase && contentJson && audioFile && (
+        <AdminPanel
+          supabase={supabase}
+          adminEmail={adminEmail}
+          generatedContentJson={contentJson}
+          generatedAudioFile={audioFile}
+          onBack={() => setWorkflowStep("sync")}
+        />
       )}
     </main>
   );
+}
+
+function readConfig(): { url: string; anonKey: string } | null {
+  const raw = localStorage.getItem(configStorageKey);
+  if (!raw) return null;
+
+  try {
+    return JSON.parse(raw) as { url: string; anonKey: string };
+  } catch {
+    return null;
+  }
 }
 
 export default App;

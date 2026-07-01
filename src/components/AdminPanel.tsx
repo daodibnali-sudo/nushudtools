@@ -1,16 +1,14 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { useMemo, useState } from "react";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import type { NushudContentJson } from "../types";
 import { makeDownloadName } from "../utils/exportJson";
 
 type AdminPanelProps = {
-  generatedContentJson: NushudContentJson | null;
-  generatedAudioFile: File | null;
-};
-
-type SupabaseConfig = {
-  url: string;
-  anonKey: string;
+  supabase: SupabaseClient;
+  adminEmail: string;
+  generatedContentJson: NushudContentJson;
+  generatedAudioFile: File;
+  onBack: () => void;
 };
 
 type LyricsMetadata = {
@@ -25,164 +23,59 @@ type LyricsMetadata = {
   languages: string[];
 };
 
-const configStorageKey = "nushudAdminConfig";
-
-export function AdminPanel({ generatedContentJson, generatedAudioFile }: AdminPanelProps) {
-  const [supabaseUrl, setSupabaseUrl] = useState("");
-  const [supabaseAnonKey, setSupabaseAnonKey] = useState("");
-  const [supabase, setSupabase] = useState<SupabaseClient | null>(null);
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [adminEmail, setAdminEmail] = useState("");
-  const [isAdmin, setIsAdmin] = useState(false);
+export function AdminPanel({
+  supabase,
+  adminEmail,
+  generatedContentJson,
+  generatedAudioFile,
+  onBack,
+}: AdminPanelProps) {
   const [coverFile, setCoverFile] = useState<File | null>(null);
-  const [audioFile, setAudioFile] = useState<File | null>(null);
-  const [lyricsFile, setLyricsFile] = useState<File | null>(null);
   const [dictionaryFile, setDictionaryFile] = useState<File | null>(null);
-  const [lyricsMetadata, setLyricsMetadata] = useState<LyricsMetadata | null>(null);
   const [publishState, setPublishState] = useState("Draft");
   const [log, setLog] = useState("Ready.");
 
-  const activeAudioFile = audioFile ?? generatedAudioFile;
-  const hasGeneratedJson = generatedContentJson !== null;
-
-  const writeLog = useCallback((message: string) => {
-    setLog(`[${new Date().toLocaleTimeString()}] ${message}`);
-  }, []);
-
-  const refreshAdminState = useCallback(
-    async (client: SupabaseClient) => {
-      const { data } = await client.auth.getUser();
-
-      if (!data.user) {
-        setAdminEmail("");
-        setIsAdmin(false);
-        return;
-      }
-
-      const { data: adminResult, error } = await client.rpc("is_admin");
-      const allowed = !error && adminResult === true;
-      setAdminEmail(data.user.email ?? "");
-      setIsAdmin(allowed);
-      writeLog(allowed ? "Logged in as admin." : "Logged in, but this user is not in public.admin_users.");
-    },
-    [writeLog],
+  const lyricsMetadata = useMemo(() => getLyricsMetadata(generatedContentJson), [generatedContentJson]);
+  const metadataPreview = useMemo(
+    () =>
+      [
+        lyricsMetadata.title,
+        `Slug: ${lyricsMetadata.slug}`,
+        `Artist: ${lyricsMetadata.artistName}`,
+        `Difficulty: ${lyricsMetadata.difficulty}`,
+        lyricsMetadata.tags.length > 0 ? `Tags: ${lyricsMetadata.tags.join(", ")}` : "Tags: none",
+        `Duration: ${lyricsMetadata.durationMs} ms`,
+        `Lines: ${lyricsMetadata.lineCount}`,
+        `Audio: ${generatedAudioFile.name}`,
+        lyricsMetadata.languages.length > 0 ? `Languages: ${lyricsMetadata.languages.join(", ")}` : "",
+      ].filter(Boolean),
+    [generatedAudioFile.name, lyricsMetadata],
   );
 
-  useEffect(() => {
-    const config = readConfig();
-    if (!config) return;
-
-    setSupabaseUrl(config.url);
-    setSupabaseAnonKey(config.anonKey);
-    const client = createClient(config.url, config.anonKey);
-    setSupabase(client);
-    void refreshAdminState(client);
-  }, [refreshAdminState]);
-
-  useEffect(() => {
-    if (!generatedContentJson || lyricsFile) return;
-
-    try {
-      validateLyricsJson(generatedContentJson);
-      setLyricsMetadata(getLyricsMetadata(generatedContentJson));
-    } catch (error) {
-      setLyricsMetadata(null);
-      writeLog(error instanceof Error ? error.message : "Generated JSON is not publishable yet.");
-    }
-  }, [generatedContentJson, lyricsFile, writeLog]);
-
-  const metadataPreview = useMemo(() => {
-    if (!lyricsMetadata) {
-      return "Choose timed lyrics JSON to detect slug, title, artist, audio filename, line count, and duration.";
-    }
-
-    return [
-      lyricsMetadata.title,
-      `Slug: ${lyricsMetadata.slug}`,
-      `Artist: ${lyricsMetadata.artistName}`,
-      `Difficulty: ${lyricsMetadata.difficulty}`,
-      lyricsMetadata.tags.length > 0 ? `Tags: ${lyricsMetadata.tags.join(", ")}` : "Tags: none",
-      `Duration: ${lyricsMetadata.durationMs} ms`,
-      `Lines: ${lyricsMetadata.lineCount}`,
-      lyricsMetadata.audioFileName ? `Expected audio: ${lyricsMetadata.audioFileName}` : "",
-      lyricsMetadata.languages.length > 0 ? `Languages: ${lyricsMetadata.languages.join(", ")}` : "",
-    ].filter(Boolean);
-  }, [lyricsMetadata]);
-
-  const saveConfig = () => {
-    const url = supabaseUrl.trim();
-    const anonKey = supabaseAnonKey.trim();
-
-    if (!url || !anonKey) {
-      writeLog("Add Supabase URL and anon key first.");
-      return;
-    }
-
-    localStorage.setItem(configStorageKey, JSON.stringify({ url, anonKey }));
-    const client = createClient(url, anonKey);
-    setSupabase(client);
-    writeLog("Connection saved.");
-    void refreshAdminState(client);
-  };
-
-  const login = async () => {
-    if (!supabase) {
-      writeLog("Save Supabase connection first.");
-      return;
-    }
-
-    const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
-
-    if (error) {
-      writeLog(`Login failed: ${error.message}`);
-      return;
-    }
-
-    await refreshAdminState(supabase);
-  };
-
-  const signOut = async () => {
-    if (!supabase) return;
-    await supabase.auth.signOut();
-    setAdminEmail("");
-    setIsAdmin(false);
-    writeLog("Signed out.");
-  };
-
-  const previewUploadedLyrics = async (file: File | null) => {
-    setLyricsFile(file);
-    if (!file) {
-      setLyricsMetadata(generatedContentJson ? getLyricsMetadata(generatedContentJson) : null);
-      return;
-    }
-
-    try {
-      const lyrics = await readJsonFile(file, "timed lyrics JSON");
-      validateLyricsJson(lyrics);
-      setLyricsMetadata(getLyricsMetadata(lyrics));
-    } catch (error) {
-      setLyricsMetadata(null);
-      writeLog(error instanceof Error ? error.message : "Could not read lyrics JSON.");
-    }
+  const writeLog = (message: string) => {
+    setLog(`[${new Date().toLocaleTimeString()}] ${message}`);
   };
 
   const validateFiles = async () => {
     try {
-      const lyrics = await getActiveLyrics(generatedContentJson, lyricsFile);
-      validateLyricsJson(lyrics);
-      const metadata = getLyricsMetadata(lyrics);
-      setLyricsMetadata(metadata);
+      validateLyricsJson(generatedContentJson);
+      validateSelectedAudioFile(lyricsMetadata, generatedAudioFile);
 
-      if (dictionaryFile) {
-        const dictionary = await readJsonFile(dictionaryFile, "words.json");
-        validateDictionaryJson(dictionary);
-        const missingWords = getMissingDictionaryWords(lyrics, dictionary);
+      if (!coverFile) {
+        throw new Error("Choose cover image first.");
+      }
 
-        if (missingWords.length > 0) {
-          writeLog(`Validation passed with dictionary warnings. Missing words: ${formatMissingWords(missingWords)}`);
-          return;
-        }
+      if (!dictionaryFile) {
+        throw new Error("Choose words.json first.");
+      }
+
+      const dictionary = await readJsonFile(dictionaryFile, "words.json");
+      validateDictionaryJson(dictionary);
+      const missingWords = getMissingDictionaryWords(generatedContentJson, dictionary);
+
+      if (missingWords.length > 0) {
+        writeLog(`Validation passed with dictionary warnings. Missing words: ${formatMissingWords(missingWords)}`);
+        return;
       }
 
       writeLog("Validation passed.");
@@ -193,56 +86,52 @@ export function AdminPanel({ generatedContentJson, generatedAudioFile }: AdminPa
 
   const publishNasheed = async () => {
     try {
-      if (!supabase || !isAdmin) {
-        throw new Error("Login as an admin first.");
-      }
+      validateLyricsJson(generatedContentJson);
+      validateSelectedAudioFile(lyricsMetadata, generatedAudioFile);
 
       if (!coverFile) {
-        throw new Error("Missing: coverFile");
+        throw new Error("Choose cover image first.");
       }
 
-      if (!activeAudioFile) {
-        throw new Error("Missing: audioFile");
+      if (!dictionaryFile) {
+        throw new Error("Choose words.json first.");
       }
 
-      const lyrics = await getActiveLyrics(generatedContentJson, lyricsFile);
-      validateLyricsJson(lyrics);
-      const metadata = getLyricsMetadata(lyrics);
-      setLyricsMetadata(metadata);
-      validateSelectedAudioFile(metadata, activeAudioFile);
+      const dictionary = await readJsonFile(dictionaryFile, "words.json");
+      validateDictionaryJson(dictionary);
+      const missingWords = getMissingDictionaryWords(generatedContentJson, dictionary);
 
-      if (dictionaryFile) {
-        const dictionary = await readJsonFile(dictionaryFile, "words.json");
-        validateDictionaryJson(dictionary);
-        const missingWords = getMissingDictionaryWords(lyrics, dictionary);
-
-        if (missingWords.length > 0) {
-          writeLog(`Publishing with missing dictionary entries: ${formatMissingWords(missingWords)}`);
-        }
-
-        await uploadFile(supabase, "dictionary", "words.json", dictionaryFile);
+      if (missingWords.length > 0) {
+        writeLog(`Publishing with missing dictionary entries: ${formatMissingWords(missingWords)}`);
       }
 
-      const lyricsUploadFile = lyricsFile ?? jsonToFile(lyrics, makeDownloadName(metadata.title));
-      const coverUrl = await uploadFile(supabase, "nasheed-covers", `${metadata.slug}.${extension(coverFile.name)}`, coverFile);
+      await uploadFile(supabase, "dictionary", "words.json", dictionaryFile);
+
+      const lyricsUploadFile = jsonToFile(generatedContentJson, makeDownloadName(lyricsMetadata.title));
+      const coverUrl = await uploadFile(
+        supabase,
+        "nasheed-covers",
+        `${lyricsMetadata.slug}.${extension(coverFile.name)}`,
+        coverFile,
+      );
       const audioUrl = await uploadFile(
         supabase,
         "nasheed-audio",
-        `${metadata.slug}.${extension(activeAudioFile.name)}`,
-        activeAudioFile,
+        `${lyricsMetadata.slug}.${extension(generatedAudioFile.name)}`,
+        generatedAudioFile,
       );
-      const lyricsJsonUrl = await uploadFile(supabase, "nasheed-lyrics", `${metadata.slug}.json`, lyricsUploadFile);
-      const normalizedWords = getNormalizedWordsFromLyrics(lyrics);
+      const lyricsJsonUrl = await uploadFile(supabase, "nasheed-lyrics", `${lyricsMetadata.slug}.json`, lyricsUploadFile);
+      const normalizedWords = getNormalizedWordsFromLyrics(generatedContentJson);
 
       const { error } = await supabase.from("nasheeds").insert({
-        title: metadata.title,
-        artist_name: metadata.artistName,
+        title: lyricsMetadata.title,
+        artist_name: lyricsMetadata.artistName,
         cover_url: coverUrl,
         audio_url: audioUrl,
         lyrics_json_url: lyricsJsonUrl,
-        duration_ms: metadata.durationMs,
-        difficulty: metadata.difficulty,
-        tags: metadata.tags,
+        duration_ms: lyricsMetadata.durationMs,
+        difficulty: lyricsMetadata.difficulty,
+        tags: lyricsMetadata.tags,
         total_words: normalizedWords.length,
         new_words_count: new Set(normalizedWords).size,
         is_published: true,
@@ -263,90 +152,20 @@ export function AdminPanel({ generatedContentJson, generatedAudioFile }: AdminPa
     <div className="admin-stack">
       <section className="panel">
         <div className="panel-heading">
-          <h2>Connect Supabase</h2>
-          <p>Stored in this browser only</p>
-        </div>
-        <div className="field-grid two-column">
-          <label>
-            Supabase URL
-            <input
-              type="url"
-              value={supabaseUrl}
-              onChange={(event) => setSupabaseUrl(event.target.value)}
-              placeholder="https://your-project.supabase.co"
-            />
-          </label>
-          <label>
-            Supabase anon key
-            <input
-              type="password"
-              value={supabaseAnonKey}
-              onChange={(event) => setSupabaseAnonKey(event.target.value)}
-              placeholder="ey..."
-            />
-          </label>
-        </div>
-        <div className="button-row admin-actions">
-          <button type="button" onClick={saveConfig}>
-            Save connection
-          </button>
-          {adminEmail && (
-            <button type="button" className="ghost-button" onClick={signOut}>
-              Sign out
-            </button>
-          )}
-        </div>
-      </section>
-
-      {!isAdmin && (
-        <section className="panel">
-          <div className="panel-heading">
-            <h2>Login</h2>
-            <p>User must be in admin_users</p>
-          </div>
-          <div className="field-grid two-column">
-            <label>
-              Email
-              <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" />
-            </label>
-            <label>
-              Password
-              <input
-                type="password"
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                autoComplete="current-password"
-              />
-            </label>
-          </div>
-          <div className="button-row admin-actions">
-            <button type="button" className="primary-button" onClick={login} disabled={!supabase}>
-              Login
-            </button>
-          </div>
-        </section>
-      )}
-
-      <section className="panel">
-        <div className="panel-heading">
           <div>
             <h2>Publish Nasheed</h2>
-            <p>{adminEmail || "Connect and login before publishing."}</p>
+            <p>{adminEmail}</p>
           </div>
           <span className="badge">{publishState}</span>
         </div>
 
         <div className="metadata-preview">
-          {Array.isArray(metadataPreview) ? (
-            metadataPreview.map((line, index) =>
-              index === 0 ? (
-                <strong key={line}>{line}</strong>
-              ) : (
-                <span key={line}>{line}</span>
-              ),
-            )
-          ) : (
-            <span>{metadataPreview}</span>
+          {metadataPreview.map((line, index) =>
+            index === 0 ? (
+              <strong key={line}>{line}</strong>
+            ) : (
+              <span key={line}>{line}</span>
+            ),
           )}
         </div>
 
@@ -357,35 +176,24 @@ export function AdminPanel({ generatedContentJson, generatedAudioFile }: AdminPa
             <span>{coverFile?.name ?? "Required"}</span>
           </label>
           <label className="file-box drop-zone">
-            Audio file
-            <input type="file" accept="audio/*" onChange={(event) => setAudioFile(event.target.files?.[0] ?? null)} />
-            <span>{activeAudioFile?.name ?? "Required unless selected in the sync tool"}</span>
-          </label>
-          <label className="file-box drop-zone">
-            Timed lyrics JSON
-            <input
-              type="file"
-              accept="application/json,.json"
-              onChange={(event) => void previewUploadedLyrics(event.target.files?.[0] ?? null)}
-            />
-            <span>{lyricsFile?.name ?? (hasGeneratedJson ? "Using generated JSON from the sync tool" : "Required")}</span>
-          </label>
-          <label className="file-box drop-zone">
             Global words.json
             <input
               type="file"
               accept="application/json,.json"
               onChange={(event) => setDictionaryFile(event.target.files?.[0] ?? null)}
             />
-            <span>{dictionaryFile?.name ?? "Optional"}</span>
+            <span>{dictionaryFile?.name ?? "Required"}</span>
           </label>
         </div>
 
         <div className="button-row admin-actions">
+          <button type="button" className="ghost-button" onClick={onBack}>
+            Back to JSON
+          </button>
           <button type="button" className="ghost-button" onClick={validateFiles}>
             Validate files
           </button>
-          <button type="button" className="primary-button" onClick={publishNasheed} disabled={!isAdmin}>
+          <button type="button" className="primary-button" onClick={publishNasheed}>
             Upload and publish
           </button>
         </div>
@@ -399,18 +207,6 @@ export function AdminPanel({ generatedContentJson, generatedAudioFile }: AdminPa
       </section>
     </div>
   );
-}
-
-async function getActiveLyrics(contentJson: NushudContentJson | null, lyricsFile: File | null): Promise<NushudContentJson> {
-  if (lyricsFile) {
-    return readJsonFile(lyricsFile, "timed lyrics JSON");
-  }
-
-  if (contentJson) {
-    return contentJson;
-  }
-
-  throw new Error("Choose timed lyrics JSON first.");
 }
 
 async function uploadFile(supabase: SupabaseClient, bucket: string, path: string, file: File): Promise<string> {
@@ -427,13 +223,13 @@ async function uploadFile(supabase: SupabaseClient, bucket: string, path: string
   return supabase.storage.from(bucket).getPublicUrl(path).data.publicUrl;
 }
 
-async function readJsonFile(file: File, label: string): Promise<NushudContentJson> {
+async function readJsonFile(file: File, label: string): Promise<unknown> {
   if (!file) {
     throw new Error(`Choose ${label} first.`);
   }
 
   try {
-    return JSON.parse(await file.text()) as NushudContentJson;
+    return JSON.parse(await file.text());
   } catch {
     throw new Error(`${label} is not valid JSON.`);
   }
@@ -592,15 +388,4 @@ function extension(fileName: string): string {
 
 function jsonToFile(json: NushudContentJson, fileName: string): File {
   return new File([JSON.stringify(json, null, 2)], fileName, { type: "application/json" });
-}
-
-function readConfig(): SupabaseConfig | null {
-  const raw = localStorage.getItem(configStorageKey);
-  if (!raw) return null;
-
-  try {
-    return JSON.parse(raw) as SupabaseConfig;
-  } catch {
-    return null;
-  }
 }
