@@ -149,12 +149,11 @@ export function AdminPanel({
       const dictionary = mergeDictionaries(existingDictionary, newWords);
       const missingWords = getMissingDictionaryWords(generatedContentJson, dictionary);
 
-      if (missingWords.length > 0) {
-        writeLog(`Still missing dictionary entries after merge: ${formatMissingWords(missingWords)}`);
-        return;
-      }
-
-      writeLog(`Validation passed. ${Object.keys(newWords).length} new word entries will be merged into ${dictionaryPath}.`);
+      writeLog(
+        missingWords.length > 0
+          ? `Validation passed. Publishing is allowed with ${missingWords.length} dictionary words still missing: ${formatMissingWords(missingWords)}`
+          : `Validation passed. ${Object.keys(newWords).length} new word entries will be merged into ${dictionaryPath}.`,
+      );
     } catch (error) {
       writeLog(error instanceof Error ? error.message : "Validation failed.");
     }
@@ -173,10 +172,6 @@ export function AdminPanel({
       const newWords = dictionaryFromEntries(newWordEntries);
       const dictionary = mergeDictionaries(existingDictionary, newWords);
       const missingWords = getMissingDictionaryWords(generatedContentJson, dictionary);
-
-      if (missingWords.length > 0) {
-        throw new Error(`Still missing dictionary entries after merge: ${formatMissingWords(missingWords)}`);
-      }
 
       await uploadDictionary(supabase, dictionary);
 
@@ -215,7 +210,11 @@ export function AdminPanel({
       }
 
       setPublishState("Published");
-      writeLog("Published. NUSHUD can now load this nasheed from Supabase.");
+      writeLog(
+        missingWords.length > 0
+          ? `Published with ${missingWords.length} dictionary words still missing. You can complete words.json later.`
+          : "Published. NUSHUD can now load this nasheed from Supabase.",
+      );
     } catch (error) {
       writeLog(error instanceof Error ? error.message : "Publish failed.");
     }
@@ -373,10 +372,19 @@ async function downloadDictionary(supabase: SupabaseClient): Promise<Dictionary>
     return {};
   }
 
+  const json = parseDictionaryJson(await data.text());
+  return normalizeDictionaryInput(json);
+}
+
+function parseDictionaryJson(text: string): unknown {
+  const normalized = text.replace(/^\uFEFF/, "").trim();
+  if (!normalized) return {};
+
   try {
-    return normalizeDictionaryInput(JSON.parse(await data.text()));
-  } catch {
-    throw new Error(`${dictionaryPath} exists but is not valid JSON.`);
+    return JSON.parse(normalized);
+  } catch (error) {
+    const detail = error instanceof SyntaxError ? ` ${error.message}` : "";
+    throw new Error(`${dictionaryPath} exists but is not valid JSON.${detail}`);
   }
 }
 
@@ -585,10 +593,6 @@ function normalizeDictionaryEntry(value: unknown, fallbackWord = ""): Dictionary
     throw new Error("Each dictionary entry needs a word.");
   }
 
-  if (meaning.length === 0) {
-    throw new Error(`${word} needs at least one meaning.`);
-  }
-
   return {
     ...record,
     word,
@@ -603,10 +607,20 @@ function normalizeDictionaryEntry(value: unknown, fallbackWord = ""): Dictionary
 }
 
 function mergeDictionaries(existingDictionary: Dictionary, newWords: Dictionary): Dictionary {
-  return {
-    ...existingDictionary,
-    ...newWords,
-  };
+  const merged = { ...existingDictionary };
+
+  Object.entries(newWords).forEach(([key, incoming]) => {
+    const existing = merged[key];
+    merged[key] = existing
+      ? {
+          ...existing,
+          ...incoming,
+          meaning: incoming.meaning.length > 0 ? incoming.meaning : existing.meaning,
+        }
+      : incoming;
+  });
+
+  return merged;
 }
 
 function getMissingDictionaryWords(lyrics: NushudContentJson, dictionary: Dictionary): string[] {

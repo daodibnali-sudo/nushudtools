@@ -218,6 +218,7 @@ function App() {
       const json = JSON.parse(await file.text()) as NushudContentJson;
       validateExistingContentJson(json);
       setExistingContentJson(json);
+      setMetadata((current) => metadataFromExistingJson(json, current));
     } catch (error) {
       setExistingContentJson(null);
       setExistingJsonError(error instanceof Error ? error.message : "Existing JSON is not valid.");
@@ -455,7 +456,7 @@ function App() {
   }, [arabicLines.length, firstLineStartMs, timestamps, translations, validationMessages]);
 
   const contentJson = useMemo(() => {
-    if (existingContentJson) return existingContentJson;
+    if (existingContentJson) return completeExistingContentJson(existingContentJson, metadata);
     if (!audioFile || arabicLines.length === 0) return null;
 
     return buildContentJson({
@@ -475,6 +476,17 @@ function App() {
 
     if (!contentJson) {
       setContinueMessage("Create or import a timed lyrics JSON first.");
+      return;
+    }
+
+    const missingMetadata = [
+      !contentJson.id.trim() && "ID / slug",
+      !contentJson.title.trim() && "title",
+      !contentJson.artist.trim() && "artist",
+    ].filter(Boolean);
+
+    if (missingMetadata.length > 0) {
+      setContinueMessage(`Fill in ${missingMetadata.join(", ")} in Metadata before continuing.`);
       return;
     }
 
@@ -634,10 +646,6 @@ function validateExistingContentJson(json: NushudContentJson) {
     throw new Error("JSON file must contain an object.");
   }
 
-  if (!json.id || !json.title || !json.artist) {
-    throw new Error("JSON needs id, title, and artist.");
-  }
-
   if (!Array.isArray(json.lines) || json.lines.length === 0) {
     throw new Error("JSON needs a non-empty lines array.");
   }
@@ -651,6 +659,51 @@ function validateExistingContentJson(json: NushudContentJson) {
       throw new Error(`Line ${index + 1} has invalid timing.`);
     }
   });
+}
+
+function metadataFromExistingJson(json: NushudContentJson, current: Metadata): Metadata {
+  const record = json as unknown as Record<string, unknown>;
+  const difficulty = record.difficulty;
+  const tags = Array.isArray(record.tags)
+    ? record.tags.filter((tag): tag is string => typeof tag === "string").join(", ")
+    : typeof record.tags === "string"
+      ? record.tags
+      : current.tags;
+
+  return {
+    id: typeof record.id === "string" ? record.id : current.id,
+    title: typeof record.title === "string" ? record.title : current.title,
+    artist: typeof record.artist === "string" ? record.artist : current.artist,
+    difficulty:
+      difficulty === "beginner" || difficulty === "intermediate" || difficulty === "advanced"
+        ? difficulty
+        : current.difficulty,
+    tags,
+  };
+}
+
+function completeExistingContentJson(json: NushudContentJson, metadata: Metadata): NushudContentJson {
+  const record = json as unknown as Record<string, unknown>;
+  const languages = Array.isArray(record.languages)
+    ? record.languages.filter((language): language is string => typeof language === "string")
+    : inferLanguages(json.lines);
+
+  return {
+    ...json,
+    id: metadata.id.trim(),
+    title: metadata.title.trim(),
+    artist: metadata.artist.trim(),
+    difficulty: metadata.difficulty,
+    tags: metadata.tags.split(",").map((tag) => tag.trim()).filter(Boolean),
+    audioFileName: typeof record.audioFileName === "string" ? record.audioFileName : "",
+    lineCount: json.lines.length,
+    languages,
+  };
+}
+
+function inferLanguages(lines: NushudContentJson["lines"]): string[] {
+  const structuralKeys = new Set(["lineIndex", "startMs", "endMs"]);
+  return Array.from(new Set(lines.flatMap((line) => Object.keys(line).filter((key) => !structuralKeys.has(key)))));
 }
 
 export default App;

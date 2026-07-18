@@ -9,13 +9,18 @@ type DictionaryPanelProps = {
 
 type DictionaryEntry = {
   word: string;
-  baseWord?: string;
-  meaning: string[];
-  root?: string;
-  wazn?: string;
-  forms?: string;
-  bab?: string;
   partOfSpeech?: string;
+  meaning: string[];
+  meaningRu?: string[];
+  root?: string;
+  plural?: string;
+  imperative?: string;
+  present?: string;
+  wazn?: string;
+  masculine?: string;
+  feminine?: string;
+  governs?: string;
+  literalMeaning?: string;
   translations?: unknown;
   similars?: unknown;
   similar?: unknown;
@@ -33,6 +38,30 @@ type WordContext = {
   }>;
 };
 
+// The extra grammar fields each part of speech needs, beyond word/partOfSpeech/meaning/meaningRu.
+const typeFields: Record<string, Array<{ key: string; label: string }>> = {
+  noun: [
+    { key: "root", label: "Root" },
+    { key: "plural", label: "Plural" },
+  ],
+  verb: [
+    { key: "imperative", label: "Imperative" },
+    { key: "present", label: "Present" },
+    { key: "wazn", label: "Wazn" },
+  ],
+  adjective: [
+    { key: "masculine", label: "Masculine" },
+    { key: "feminine", label: "Feminine" },
+    { key: "plural", label: "Plural" },
+  ],
+  adverb: [],
+  pronoun: [],
+  particle: [],
+  preposition: [{ key: "governs", label: "Governs" }],
+  conjunction: [],
+  expression: [{ key: "literalMeaning", label: "Literal meaning" }],
+};
+
 const dictionaryBucket = "dictionary";
 const dictionaryPath = "words.json";
 
@@ -40,6 +69,7 @@ export function DictionaryPanel({ supabase, adminEmail }: DictionaryPanelProps) 
   const [dictionary, setDictionary] = useState<Dictionary>({});
   const [selectedKey, setSelectedKey] = useState("");
   const [query, setQuery] = useState("");
+  const [showMissingMeaningsOnly, setShowMissingMeaningsOnly] = useState(false);
   const [newWordsText, setNewWordsText] = useState("");
   const [suggestions, setSuggestions] = useState<DictionaryEntry[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -59,19 +89,16 @@ export function DictionaryPanel({ supabase, adminEmail }: DictionaryPanelProps) 
     const needle = query.trim().toLowerCase();
     const normalizedNeedle = normalizeArabicWord(query);
 
-    if (!needle && !normalizedNeedle) return entries;
-
     return entries.filter(([key, entry]) => {
+      if (showMissingMeaningsOnly && entry.meaning.length > 0) return false;
+      if (!needle && !normalizedNeedle) return true;
+
       const haystack = [
         key,
         entry.word,
-        entry.baseWord,
         entry.meaning.join(", "),
-        entry.root,
-        entry.wazn,
-        entry.forms,
-        entry.bab,
         entry.partOfSpeech,
+        ...(typeFields[entry.partOfSpeech ?? ""] ?? []).map((field) => entry[field.key]),
       ]
         .filter(Boolean)
         .join(" ")
@@ -79,7 +106,12 @@ export function DictionaryPanel({ supabase, adminEmail }: DictionaryPanelProps) 
 
       return haystack.includes(needle) || key.includes(normalizedNeedle);
     });
-  }, [entries, query]);
+  }, [entries, query, showMissingMeaningsOnly]);
+
+  const missingMeaningEntries = useMemo(
+    () => entries.filter(([, entry]) => entry.meaning.length === 0),
+    [entries],
+  );
 
   const selectedEntry = selectedKey ? dictionary[selectedKey] : null;
 
@@ -111,8 +143,19 @@ export function DictionaryPanel({ supabase, adminEmail }: DictionaryPanelProps) 
   const saveDictionary = async () => {
     try {
       setIsSaving(true);
-      await uploadDictionary(supabase, dictionary);
-      writeStatus(`Saved ${Object.keys(dictionary).length} entries to ${dictionaryPath}.`);
+      const dictionaryToSave = { ...dictionary };
+      suggestions.forEach((entry) => {
+        dictionaryToSave[normalizeArabicWord(entry.word)] = entry;
+      });
+
+      await uploadDictionary(supabase, dictionaryToSave);
+      setDictionary(dictionaryToSave);
+      setSuggestions([]);
+      writeStatus(
+        `Saved ${Object.keys(dictionaryToSave).length} entries to ${dictionaryBucket}/${dictionaryPath}${
+          suggestions.length > 0 ? `, including ${suggestions.length} pending AI suggestions` : ""
+        }.`,
+      );
     } catch (error) {
       writeStatus(error instanceof Error ? error.message : "Could not save dictionary.");
     } finally {
@@ -204,12 +247,59 @@ export function DictionaryPanel({ supabase, adminEmail }: DictionaryPanelProps) 
     );
   };
 
+  const fillMissingMeaningsWithAi = async () => {
+    const missingWords = missingMeaningEntries.map(([, entry]) => ({
+      word: entry.word,
+      normalizedWord: normalizeArabicWord(entry.word),
+      lines: [],
+    }));
+
+    if (missingWords.length === 0) {
+      writeStatus("Every dictionary word already has a meaning.");
+      return;
+    }
+
+    await fillWordsWithAi(missingWords);
+  };
+
+  const regenerateAllWithAi = async () => {
+    if (entries.length === 0) {
+      writeStatus("Dictionary is empty.");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Regenerate all ${entries.length} words with AI? This overwrites every entry's fields ` +
+        "(old ones like baseWord/wazn/forms/bab get replaced by the new schema). Review suggestions before saving.",
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    await fillWordsWithAi(
+      entries.map(([, entry]) => ({ word: entry.word, normalizedWord: normalizeArabicWord(entry.word), lines: [] })),
+    );
+  };
+
+  const aiBatchSize = 100;
+
   const fillWordsWithAi = async (words: WordContext[]) => {
     try {
       setIsFilling(true);
-      const filledEntries = await requestAiDictionaryEntries(supabase, words);
-      setSuggestions(filledEntries);
-      writeStatus(`AI suggested ${filledEntries.length} entries. Review, then apply or skip.`);
+      setSuggestions([]);
+      const allEntries: DictionaryEntry[] = [];
+
+      for (let start = 0; start < words.length; start += aiBatchSize) {
+        const batch = words.slice(start, start + aiBatchSize);
+        writeStatus(`Asking AI for words ${start + 1}-${start + batch.length} of ${words.length}...`);
+
+        const filledEntries = await requestAiDictionaryEntries(supabase, batch);
+        allEntries.push(...filledEntries);
+        setSuggestions([...allEntries]);
+      }
+
+      writeStatus(`AI suggested ${allEntries.length} entries. Review, then apply or skip.`);
     } catch (error) {
       writeStatus(error instanceof Error ? error.message : "AI fill failed.");
     } finally {
@@ -228,6 +318,21 @@ export function DictionaryPanel({ supabase, adminEmail }: DictionaryPanelProps) 
   const skipSuggestion = (entry: DictionaryEntry) => {
     const key = normalizeArabicWord(entry.word);
     setSuggestions((current) => current.filter((suggestion) => normalizeArabicWord(suggestion.word) !== key));
+  };
+
+  const applyAllSuggestions = () => {
+    if (suggestions.length === 0) return;
+
+    setDictionary((current) => {
+      const next = { ...current };
+      suggestions.forEach((entry) => {
+        next[normalizeArabicWord(entry.word)] = entry;
+      });
+      return next;
+    });
+    setSelectedKey(normalizeArabicWord(suggestions[0].word));
+    writeStatus(`Applied ${suggestions.length} AI suggestions locally. Press Save dictionary to publish them.`);
+    setSuggestions([]);
   };
 
   const importDictionaryJson = async (file: File | null) => {
@@ -298,6 +403,14 @@ export function DictionaryPanel({ supabase, adminEmail }: DictionaryPanelProps) 
               placeholder="Arabic, meaning, root, wazn, bab..."
             />
           </label>
+          <label className="checkbox-row">
+            <input
+              type="checkbox"
+              checked={showMissingMeaningsOnly}
+              onChange={(event) => setShowMissingMeaningsOnly(event.target.checked)}
+            />
+            Missing meanings only ({missingMeaningEntries.length})
+          </label>
           <div className="button-row">
             <button type="button" className="ghost-button" onClick={loadDictionary} disabled={isLoading}>
               {isLoading ? "Loading..." : "Reload"}
@@ -332,14 +445,21 @@ export function DictionaryPanel({ supabase, adminEmail }: DictionaryPanelProps) 
                     <input value={selectedEntry.word} onChange={(event) => updateSelectedEntry({ word: event.target.value })} />
                   </label>
                   <label>
-                    Base word
-                    <input
-                      value={selectedEntry.baseWord ?? ""}
-                      onChange={(event) => updateSelectedEntry({ baseWord: event.target.value })}
-                    />
+                    Part of speech
+                    <select
+                      value={selectedEntry.partOfSpeech ?? ""}
+                      onChange={(event) => updateSelectedEntry({ partOfSpeech: event.target.value })}
+                    >
+                      <option value="">(unclassified)</option>
+                      {Object.keys(typeFields).map((type) => (
+                        <option key={type} value={type}>
+                          {type}
+                        </option>
+                      ))}
+                    </select>
                   </label>
                   <label>
-                    Meanings
+                    Meanings (EN)
                     <input
                       value={selectedEntry.meaning.join(", ")}
                       onChange={(event) =>
@@ -353,31 +473,28 @@ export function DictionaryPanel({ supabase, adminEmail }: DictionaryPanelProps) 
                     />
                   </label>
                   <label>
-                    Part of speech
+                    Meanings (RU)
                     <input
-                      value={selectedEntry.partOfSpeech ?? ""}
-                      onChange={(event) => updateSelectedEntry({ partOfSpeech: event.target.value })}
+                      value={(selectedEntry.meaningRu ?? []).join(", ")}
+                      onChange={(event) =>
+                        updateSelectedEntry({
+                          meaningRu: event.target.value
+                            .split(",")
+                            .map((meaning) => meaning.trim())
+                            .filter(Boolean),
+                        })
+                      }
                     />
                   </label>
-                  <label>
-                    Root
-                    <input value={selectedEntry.root ?? ""} onChange={(event) => updateSelectedEntry({ root: event.target.value })} />
-                  </label>
-                  <label>
-                    Wazn
-                    <input value={selectedEntry.wazn ?? ""} onChange={(event) => updateSelectedEntry({ wazn: event.target.value })} />
-                  </label>
-                  <label>
-                    Forms
-                    <input
-                      value={selectedEntry.forms ?? ""}
-                      onChange={(event) => updateSelectedEntry({ forms: event.target.value })}
-                    />
-                  </label>
-                  <label>
-                    Bab
-                    <input value={selectedEntry.bab ?? ""} onChange={(event) => updateSelectedEntry({ bab: event.target.value })} />
-                  </label>
+                  {(typeFields[selectedEntry.partOfSpeech ?? ""] ?? []).map((field) => (
+                    <label key={field.key}>
+                      {field.label}
+                      <input
+                        value={typeof selectedEntry[field.key] === "string" ? (selectedEntry[field.key] as string) : ""}
+                        onChange={(event) => updateSelectedEntry({ [field.key]: event.target.value })}
+                      />
+                    </label>
+                  ))}
                 </div>
                 <div className="button-row editor-actions">
                   <button type="button" className="ghost-button" onClick={checkSelectedWithAi} disabled={isFilling}>
@@ -438,14 +555,25 @@ export function DictionaryPanel({ supabase, adminEmail }: DictionaryPanelProps) 
           <button type="button" className="ghost-button" onClick={checkVisibleWithAi} disabled={isFilling}>
             AI check visible list
           </button>
+          <button type="button" className="primary-button" onClick={fillMissingMeaningsWithAi} disabled={isFilling}>
+            {isFilling ? "Asking AI..." : `Fill all missing meanings (${missingMeaningEntries.length})`}
+          </button>
+          <button type="button" className="ghost-button" onClick={regenerateAllWithAi} disabled={isFilling}>
+            {isFilling ? "Asking AI..." : `Regenerate ALL entries (${entries.length})`}
+          </button>
         </div>
       </section>
 
       {suggestions.length > 0 && (
         <section className="panel">
           <div className="panel-heading">
-            <h2>AI Suggestions</h2>
-            <p>Apply only what looks right</p>
+            <div>
+              <h2>AI Suggestions</h2>
+              <p>Review before saving to words.json</p>
+            </div>
+            <button type="button" className="primary-button" onClick={applyAllSuggestions}>
+              Apply all ({suggestions.length})
+            </button>
           </div>
           <div className="suggestion-list">
             {suggestions.map((entry) => (
@@ -454,7 +582,10 @@ export function DictionaryPanel({ supabase, adminEmail }: DictionaryPanelProps) 
                   <strong>{entry.word}</strong>
                   <span>{entry.meaning.join(", ")}</span>
                   <small>
-                    {[entry.baseWord, entry.root, entry.wazn, entry.forms, entry.bab, entry.partOfSpeech]
+                    {[
+                      entry.partOfSpeech,
+                      ...(typeFields[entry.partOfSpeech ?? ""] ?? []).map((field) => entry[field.key]),
+                    ]
                       .filter(Boolean)
                       .join(" | ")}
                   </small>
@@ -490,17 +621,26 @@ async function downloadDictionary(supabase: SupabaseClient): Promise<Dictionary>
     return {};
   }
 
+  const json = parseDictionaryJson(await data.text());
+  return normalizeDictionaryInput(json);
+}
+
+function parseDictionaryJson(text: string): unknown {
+  const normalized = text.replace(/^\uFEFF/, "").trim();
+  if (!normalized) return {};
+
   try {
-    return normalizeDictionaryInput(JSON.parse(await data.text()));
-  } catch {
-    throw new Error(`${dictionaryPath} exists but is not valid JSON.`);
+    return JSON.parse(normalized);
+  } catch (error) {
+    const detail = error instanceof SyntaxError ? ` ${error.message}` : "";
+    throw new Error(`${dictionaryPath} exists but is not valid JSON.${detail}`);
   }
 }
 
 async function uploadDictionary(supabase: SupabaseClient, dictionary: Dictionary): Promise<void> {
   const dictionaryFile = new File([JSON.stringify(dictionary, null, 2)], dictionaryPath, { type: "application/json" });
   const { error } = await supabase.storage.from(dictionaryBucket).upload(dictionaryPath, dictionaryFile, {
-    cacheControl: "3600",
+    cacheControl: "0",
     contentType: "application/json",
     upsert: true,
   });
@@ -581,41 +721,43 @@ function normalizeDictionaryEntry(value: unknown, fallbackWord = ""): Dictionary
 
   const record = value as Record<string, unknown>;
   const word = String(record.word ?? fallbackWord).trim();
-  const meaning = Array.isArray(record.meaning)
-    ? record.meaning.map((item) => String(item).trim()).filter(Boolean)
-    : typeof record.meaning === "string"
-      ? record.meaning
-          .split(",")
-          .map((item) => item.trim())
-          .filter(Boolean)
-      : [];
+  const meaning = asStringArray(record.meaning);
+  const meaningRu = asStringArray(record.meaningRu);
+  const partOfSpeech = typeof record.partOfSpeech === "string" ? record.partOfSpeech : "";
 
   if (!word) {
     throw new Error("Each dictionary entry needs a word.");
   }
 
-  return {
-    ...record,
-    word,
-    baseWord: typeof record.baseWord === "string" ? record.baseWord : "",
-    meaning,
-    root: typeof record.root === "string" ? record.root : "",
-    wazn: typeof record.wazn === "string" ? record.wazn : "",
-    forms: typeof record.forms === "string" ? record.forms : "",
-    bab: typeof record.bab === "string" ? record.bab : "",
-    partOfSpeech: typeof record.partOfSpeech === "string" ? record.partOfSpeech : "",
-  };
+  const entry: DictionaryEntry = { word, meaning, meaningRu, partOfSpeech };
+
+  (typeFields[partOfSpeech] ?? []).forEach((field) => {
+    entry[field.key] = typeof record[field.key] === "string" ? record[field.key] : "";
+  });
+
+  return entry;
+}
+
+function asStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item).trim()).filter(Boolean);
+  }
+
+  if (typeof value === "string") {
+    return value
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+
+  return [];
 }
 
 function createDraftEntry(word: string): DictionaryEntry {
   return {
     word,
-    baseWord: "",
     meaning: [],
-    root: "",
-    wazn: "",
-    forms: "",
-    bab: "",
+    meaningRu: [],
     partOfSpeech: "",
   };
 }

@@ -34,12 +34,12 @@ export function ExistingJsonPanel({ existingJsonFileName, existingJson, onJsonUp
       </label>
       {existingJson && (
         <div className="metadata-preview existing-json-preview">
-          <strong>{existingJson.title}</strong>
-          <span>Slug: {existingJson.id}</span>
-          <span>Artist: {existingJson.artist}</span>
+          <strong>{existingJson.title || "Title not set"}</strong>
+          <span>Slug: {existingJson.id || "not set"}</span>
+          <span>Artist: {existingJson.artist || "not set"}</span>
           <span>Audio: {existingJson.audioFileName || "not set"}</span>
           <span>Lines: {existingJson.lines.length}</span>
-          <span>Languages: {existingJson.languages.join(", ")}</span>
+          <span>Languages: {Array.isArray(existingJson.languages) ? existingJson.languages.join(", ") : "detected from lines"}</span>
         </div>
       )}
       {existingJson && (
