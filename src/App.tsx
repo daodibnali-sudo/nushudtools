@@ -7,6 +7,7 @@ import { ExistingJsonPanel } from "./components/ExistingJsonPanel";
 import { ExportPanel } from "./components/ExportPanel";
 import { Header } from "./components/Header";
 import { MetadataPanel } from "./components/MetadataPanel";
+import { LibraryPanel } from "./components/LibraryPanel";
 import { SetupPanel } from "./components/SetupPanel";
 import { ShortcutHelp } from "./components/ShortcutHelp";
 import { SyncPreview } from "./components/SyncPreview";
@@ -36,7 +37,7 @@ function isTypingTarget(target: EventTarget | null): boolean {
 
 function App() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const [workflowStep, setWorkflowStep] = useState<"checking" | "setup" | "sync" | "publish" | "dictionary">("checking");
+  const [workflowStep, setWorkflowStep] = useState<"checking" | "setup" | "sync" | "publish" | "dictionary" | "library">("checking");
   const [supabase, setSupabase] = useState<SupabaseClient | null>(null);
   const [adminEmail, setAdminEmail] = useState("");
   const [metadata, setMetadata] = useState<Metadata>({
@@ -507,7 +508,7 @@ function App() {
     <main className="app-shell">
       <Header
         currentView={
-          workflowStep === "sync" || workflowStep === "publish" || workflowStep === "dictionary"
+          workflowStep === "sync" || workflowStep === "publish" || workflowStep === "dictionary" || workflowStep === "library"
             ? workflowStep
             : undefined
         }
@@ -626,6 +627,7 @@ function App() {
         />
       )}
       {workflowStep === "dictionary" && supabase && <DictionaryPanel supabase={supabase} adminEmail={adminEmail} />}
+      {workflowStep === "library" && supabase && <LibraryPanel supabase={supabase} adminEmail={adminEmail} />}
     </main>
   );
 }

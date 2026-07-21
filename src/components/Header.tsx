@@ -1,6 +1,6 @@
 type HeaderProps = {
-  currentView?: "sync" | "dictionary" | "publish";
-  onNavigate?: (view: "sync" | "dictionary") => void;
+  currentView?: "sync" | "dictionary" | "library" | "publish";
+  onNavigate?: (view: "sync" | "dictionary" | "library") => void;
 };
 
 export function Header({ currentView, onNavigate }: HeaderProps) {
@@ -26,6 +26,13 @@ export function Header({ currentView, onNavigate }: HeaderProps) {
               onClick={() => onNavigate("dictionary")}
             >
               Dictionary
+            </button>
+            <button
+              type="button"
+              className={currentView === "library" ? "active" : ""}
+              onClick={() => onNavigate("library")}
+            >
+              Library
             </button>
           </nav>
         )}
