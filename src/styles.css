@@ -157,16 +157,29 @@ label {
 .visibility-dot { width: 0.55rem; height: 0.55rem; border-radius: 50%; background: #666; }
 .visibility-dot.published { background: #57c785; box-shadow: 0 0 0 3px rgba(87, 199, 133, 0.12); }
 .library-actions { flex-wrap: wrap; margin-bottom: 1rem; }
+.library-metadata-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.75rem; margin-bottom: 1rem; border-block: 1px solid #2a2a2a; padding-block: 1rem; }
+.library-metadata-grid label > span { color: #666; font-size: 0.75rem; }
+.library-metadata-grid input[readonly] { color: #777; cursor: default; }
+.library-cover-editor { display: grid; grid-row: span 2; gap: 0.65rem; }
+.library-cover-editor img { width: 100%; height: 11rem; border: 1px solid #2a2a2a; border-radius: 8px; background: #0a0a0a; object-fit: cover; }
+.library-cover-editor input { padding: 0; border: 0; background: transparent; }
+.library-file-editor input { padding: 0; border: 0; background: transparent; }
 .danger-button { margin-left: auto; border-color: #7f1d1d; background: #3f1217; color: #fecaca; }
 .language-tabs { display: flex; align-items: center; gap: 0.4rem; min-height: 3rem; margin-bottom: 0.75rem; border-block: 1px solid #2a2a2a; overflow-x: auto; }
 .language-tabs button { min-height: 2rem; padding: 0.35rem 0.65rem; background: transparent; }
 .language-tabs button.active { border-color: #a97b3d; color: #c99a55; }
 .language-tabs span, .empty-state, .library-placeholder p { color: #a1a1aa; }
+.library-audio-sync { display: grid; grid-template-columns: minmax(12rem, 0.5fr) minmax(18rem, 1fr) auto; align-items: center; gap: 1rem; margin-bottom: 0.75rem; border: 1px solid #2a2a2a; border-radius: 8px; padding: 0.75rem; background: #111; }
+.library-audio-sync > div { display: grid; gap: 0.25rem; }
+.library-audio-sync span, .library-audio-sync output { color: #a1a1aa; font-size: 0.82rem; }
+.library-audio-sync audio { width: 100%; height: 2.6rem; }
 .lyrics-editor-list { display: grid; gap: 0.65rem; max-height: 66vh; overflow: auto; padding-right: 0.35rem; }
 .lyrics-edit-row { display: grid; grid-template-columns: 2.5rem minmax(0, 1fr) minmax(0, 1fr); gap: 0.65rem; align-items: start; border: 1px solid #252525; border-radius: 8px; padding: 0.65rem; background: #111; }
 .lyrics-edit-row textarea { min-height: 5.2rem; resize: vertical; line-height: 1.55; }
 .lyrics-edit-row textarea[dir="rtl"] { font-size: 1.15rem; }
 .line-number { display: grid; place-items: center; min-height: 2.4rem; color: #777; font-variant-numeric: tabular-nums; }
+.timestamp-editor { grid-column: 2 / -1; display: grid; grid-template-columns: minmax(7rem, 1fr) auto minmax(7rem, 1fr) auto auto; gap: 0.5rem; align-items: end; }
+.timestamp-editor button { white-space: nowrap; }
 .library-placeholder { display: grid; min-height: 20rem; place-content: center; text-align: center; }
 .library-placeholder h2 { margin-bottom: 0; }
 .success-badge { border-color: #256d46; color: #86efac; }
@@ -175,8 +188,12 @@ label {
   .library-panel { grid-template-columns: 1fr; }
   .library-sidebar { position: static; }
   .library-list { max-height: 18rem; }
+  .library-metadata-grid { grid-template-columns: 1fr; }
   .lyrics-edit-row { grid-template-columns: 2rem 1fr; }
   .lyrics-edit-row label:last-child { grid-column: 2; }
+  .library-audio-sync { grid-template-columns: 1fr; }
+  .timestamp-editor { grid-template-columns: 1fr 1fr; }
+  .timestamp-editor label { grid-column: auto !important; }
   .danger-button { margin-left: 0; }
 }
 

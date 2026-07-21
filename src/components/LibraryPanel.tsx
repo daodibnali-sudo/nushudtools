@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { NushudContentJson } from "../types";
 
@@ -10,6 +10,8 @@ type NasheedRecord = {
   audio_url: string;
   lyrics_json_url: string;
   difficulty: string;
+  tags: string[];
+  duration_ms?: number;
   is_published: boolean;
   created_at?: string;
 };
@@ -22,11 +24,15 @@ type LibraryPanelProps = {
 const structuralKeys = new Set(["lineIndex", "startMs", "endMs", "ar"]);
 
 export function LibraryPanel({ supabase, adminEmail }: LibraryPanelProps) {
+  const audioRef = useRef<HTMLAudioElement | null>(null);
   const [items, setItems] = useState<NasheedRecord[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [lyrics, setLyrics] = useState<NushudContentJson | null>(null);
   const [query, setQuery] = useState("");
   const [language, setLanguage] = useState("en");
+  const [coverFile, setCoverFile] = useState<File | null>(null);
+  const [audioFile, setAudioFile] = useState<File | null>(null);
+  const [playheadMs, setPlayheadMs] = useState(0);
   const [status, setStatus] = useState("Ready.");
   const [busy, setBusy] = useState(false);
 
@@ -50,6 +56,8 @@ export function LibraryPanel({ supabase, adminEmail }: LibraryPanelProps) {
   }, []);
 
   useEffect(() => {
+    setCoverFile(null);
+    setAudioFile(null);
     if (!selected) {
       setLyrics(null);
       return;
@@ -58,6 +66,26 @@ export function LibraryPanel({ supabase, adminEmail }: LibraryPanelProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId]);
 
+  const coverPreviewUrl = useMemo(
+    () => coverFile ? URL.createObjectURL(coverFile) : selected?.cover_url ?? "",
+    [coverFile, selected?.cover_url],
+  );
+
+  useEffect(() => {
+    if (!coverFile || !coverPreviewUrl) return;
+    return () => URL.revokeObjectURL(coverPreviewUrl);
+  }, [coverFile, coverPreviewUrl]);
+
+  const audioPreviewUrl = useMemo(
+    () => audioFile ? URL.createObjectURL(audioFile) : selected?.audio_url ?? "",
+    [audioFile, selected?.audio_url],
+  );
+
+  useEffect(() => {
+    if (!audioFile || !audioPreviewUrl) return;
+    return () => URL.revokeObjectURL(audioPreviewUrl);
+  }, [audioFile, audioPreviewUrl]);
+
   const writeStatus = (message: string) => setStatus(`[${new Date().toLocaleTimeString()}] ${message}`);
 
   const loadLibrary = async () => {
@@ -65,7 +93,7 @@ export function LibraryPanel({ supabase, adminEmail }: LibraryPanelProps) {
       setBusy(true);
       const { data, error } = await supabase
         .from("nasheeds")
-        .select("id,title,artist_name,cover_url,audio_url,lyrics_json_url,difficulty,is_published,created_at")
+        .select("id,title,artist_name,cover_url,audio_url,lyrics_json_url,difficulty,tags,duration_ms,is_published,created_at")
         .order("created_at", { ascending: false });
       if (error) throw new Error(error.message);
       const loaded = (data ?? []) as NasheedRecord[];
@@ -102,6 +130,30 @@ export function LibraryPanel({ supabase, adminEmail }: LibraryPanelProps) {
       ...current,
       lines: current.lines.map((line, lineIndex) => lineIndex === index ? { ...line, [key]: value } : line),
     } : current);
+  };
+
+  const updateTiming = (index: number, key: "startMs" | "endMs", value: number | null) => {
+    setLyrics((current) => current ? {
+      ...current,
+      lines: current.lines.map((line, lineIndex) => lineIndex === index ? { ...line, [key]: value } : line),
+    } : current);
+  };
+
+  const seekToLine = (index: number) => {
+    const audio = audioRef.current;
+    const line = lyrics?.lines[index];
+    if (!audio || !line) return;
+    audio.currentTime = line.startMs / 1000;
+    void audio.play();
+  };
+
+  const updateSelectedMetadata = (patch: Partial<NasheedRecord>) => {
+    if (!selected) return;
+    setItems((current) => current.map((item) => item.id === selected.id ? { ...item, ...patch } : item));
+  };
+
+  const updateLyricsMetadata = (patch: Partial<NushudContentJson>) => {
+    setLyrics((current) => current ? { ...current, ...patch } : current);
   };
 
   const addLanguage = () => {
@@ -151,8 +203,37 @@ export function LibraryPanel({ supabase, adminEmail }: LibraryPanelProps) {
         cacheControl: "0",
       });
       if (error) throw new Error(error.message);
+      if (coverFile) {
+        const coverPath = storagePath(selected.cover_url);
+        if (!coverPath) throw new Error("Could not determine the existing cover image path.");
+        const { error: coverError } = await supabase.storage.from("nasheed-covers").upload(coverPath, coverFile, {
+          upsert: true,
+          contentType: coverFile.type || undefined,
+          cacheControl: "0",
+        });
+        if (coverError) throw new Error(`Lyrics saved, but cover could not be replaced: ${coverError.message}`);
+      }
+      if (audioFile) {
+        const audioPath = storagePath(selected.audio_url);
+        if (!audioPath) throw new Error("Could not determine the existing MP3 path.");
+        const { error: audioError } = await supabase.storage.from("nasheed-audio").upload(audioPath, audioFile, {
+          upsert: true,
+          contentType: audioFile.type || "audio/mpeg",
+          cacheControl: "0",
+        });
+        if (audioError) throw new Error(`Other changes saved, but MP3 could not be replaced: ${audioError.message}`);
+      }
+      const { error: rowError } = await supabase.from("nasheeds").update({
+        title: selected.title.trim(),
+        artist_name: selected.artist_name.trim(),
+        difficulty: selected.difficulty,
+        tags: selected.tags ?? [],
+      }).eq("id", selected.id);
+      if (rowError) throw new Error(`Lyrics saved, but metadata could not be saved: ${rowError.message}`);
       setLyrics(normalized);
-      writeStatus(`Saved Arabic and ${languages.length} translation language${languages.length === 1 ? "" : "s"}.`);
+      setCoverFile(null);
+      setAudioFile(null);
+      writeStatus(`Saved metadata${coverFile ? ", cover image" : ""}${audioFile ? ", MP3" : ""}, Arabic, timestamps, and ${languages.length} translation language${languages.length === 1 ? "" : "s"}.`);
     } catch (error) {
       writeStatus(error instanceof Error ? error.message : "Could not save lyrics.");
     } finally {
@@ -237,6 +318,93 @@ export function LibraryPanel({ supabase, adminEmail }: LibraryPanelProps) {
               <button type="button" disabled={busy} onClick={saveLyrics}>Save changes</button>
               <button type="button" className="danger-button" disabled={busy} onClick={() => deleteNasheed(selected)}>Delete</button>
             </div>
+            <div className="library-metadata-grid">
+              <div className="library-cover-editor">
+                <img src={coverPreviewUrl} alt={`Cover for ${selected.title}`} />
+                <label>
+                  Cover image
+                  <input type="file" accept="image/*" onChange={(event) => setCoverFile(event.target.files?.[0] ?? null)} />
+                  <span>{coverFile ? `${coverFile.name} — saves with other changes` : "Choose an image to replace the current cover"}</span>
+                </label>
+              </div>
+              <div className="library-file-editor">
+                <label>
+                  MP3 audio
+                  <input type="file" accept="audio/mpeg,.mp3" onChange={(event) => setAudioFile(event.target.files?.[0] ?? null)} />
+                  <span>{audioFile ? `${audioFile.name} — loaded below and saves with other changes` : "Choose an MP3 to replace the current audio"}</span>
+                </label>
+              </div>
+              <label>
+                Title
+                <input
+                  value={selected.title}
+                  onChange={(event) => {
+                    updateSelectedMetadata({ title: event.target.value });
+                    updateLyricsMetadata({ title: event.target.value });
+                  }}
+                />
+              </label>
+              <label>
+                Author / artist
+                <input
+                  value={selected.artist_name}
+                  onChange={(event) => {
+                    updateSelectedMetadata({ artist_name: event.target.value });
+                    updateLyricsMetadata({ artist: event.target.value });
+                  }}
+                />
+              </label>
+              <label>
+                Content ID / slug
+                <input value={lyrics.id ?? ""} onChange={(event) => updateLyricsMetadata({ id: slugify(event.target.value) })} />
+              </label>
+              <label>
+                Difficulty
+                <select
+                  value={selected.difficulty}
+                  onChange={(event) => {
+                    const difficulty = event.target.value as NushudContentJson["difficulty"];
+                    updateSelectedMetadata({ difficulty });
+                    updateLyricsMetadata({ difficulty });
+                  }}
+                >
+                  <option value="beginner">Beginner</option>
+                  <option value="intermediate">Intermediate</option>
+                  <option value="advanced">Advanced</option>
+                </select>
+              </label>
+              <label className="metadata-tags-field">
+                Tags <span>comma separated</span>
+                <input
+                  value={(selected.tags ?? []).join(", ")}
+                  onChange={(event) => {
+                    const tags = event.target.value.split(",").map((tag) => tag.trim()).filter(Boolean);
+                    updateSelectedMetadata({ tags });
+                    updateLyricsMetadata({ tags });
+                  }}
+                  placeholder="spiritual, easy, chorus"
+                />
+              </label>
+              <label>
+                Database ID <span>read-only</span>
+                <input value={selected.id} readOnly />
+              </label>
+            </div>
+            <div className="library-audio-sync">
+              <div>
+                <strong>Redo timestamps</strong>
+                <span>Play the audio, then capture the playhead for each line.</span>
+              </div>
+              <audio
+                ref={audioRef}
+                src={audioPreviewUrl}
+                controls
+                preload="metadata"
+                onTimeUpdate={(event) => setPlayheadMs(Math.round(event.currentTarget.currentTime * 1000))}
+                onSeeked={(event) => setPlayheadMs(Math.round(event.currentTarget.currentTime * 1000))}
+              />
+              <output>{playheadMs.toLocaleString()} ms</output>
+            </div>
             <div className="language-tabs" aria-label="Translation language">
               {languages.map((code) => <button type="button" key={code} className={language === code ? "active" : ""} onClick={() => setLanguage(code)}>{code.toUpperCase()}</button>)}
               {languages.length === 0 && <span>No translations yet — add a language to begin.</span>}
@@ -247,6 +415,13 @@ export function LibraryPanel({ supabase, adminEmail }: LibraryPanelProps) {
                   <span className="line-number">{index + 1}</span>
                   <label>Arabic<textarea dir="rtl" lang="ar" value={String(line.ar ?? "")} onChange={(event) => updateLine(index, "ar", event.target.value)} /></label>
                   <label>{language ? `${language.toUpperCase()} translation` : "Translation"}<textarea value={language ? String(line[language] ?? "") : ""} disabled={!language || languages.length === 0} onChange={(event) => updateLine(index, language, event.target.value)} /></label>
+                  <div className="timestamp-editor">
+                    <label>Start ms<input type="number" min="0" value={line.startMs} onChange={(event) => updateTiming(index, "startMs", Math.max(0, Number(event.target.value)))} /></label>
+                    <button type="button" className="ghost-button" onClick={() => updateTiming(index, "startMs", playheadMs)}>Set start</button>
+                    <label>End ms<input type="number" min="0" value={line.endMs ?? ""} placeholder="No end" onChange={(event) => updateTiming(index, "endMs", event.target.value === "" ? null : Math.max(0, Number(event.target.value)))} /></label>
+                    <button type="button" className="ghost-button" onClick={() => updateTiming(index, "endMs", playheadMs)}>Set end</button>
+                    <button type="button" className="ghost-button" onClick={() => seekToLine(index)}>Play line</button>
+                  </div>
                 </article>
               ))}
             </div>
@@ -277,4 +452,12 @@ function storagePath(url: string): string | null {
   } catch {
     return null;
   }
+}
+
+function slugify(value: string): string {
+  return value
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
 }
