@@ -260,6 +260,7 @@ export function LibraryPanel({ supabase, adminEmail }: LibraryPanelProps) {
     if (!window.confirm(`Permanently delete “${item.title}”? Its lyrics, audio, cover, and database row will be removed.`)) return;
     try {
       setBusy(true);
+      const cleanupWarnings: string[] = [];
       const assets: Array<[string, string]> = [
         ["nasheed-lyrics", item.lyrics_json_url],
         ["nasheed-audio", item.audio_url],
@@ -269,7 +270,7 @@ export function LibraryPanel({ supabase, adminEmail }: LibraryPanelProps) {
         const path = storagePath(url);
         if (path) {
           const { error } = await supabase.storage.from(bucket).remove([path]);
-          if (error) throw new Error(`Could not delete ${bucket}: ${error.message}`);
+          if (error) cleanupWarnings.push(`${bucket}: ${error.message}`);
         }
       }
       const { error } = await supabase.from("nasheeds").delete().eq("id", item.id);
@@ -277,7 +278,11 @@ export function LibraryPanel({ supabase, adminEmail }: LibraryPanelProps) {
       const remaining = items.filter((entry) => entry.id !== item.id);
       setItems(remaining);
       setSelectedId(remaining[0]?.id ?? "");
-      writeStatus(`${item.title} was permanently deleted.`);
+      writeStatus(
+        cleanupWarnings.length > 0
+          ? `${item.title} was deleted from the library. Some already-broken storage files could not be cleaned up.`
+          : `${item.title} was permanently deleted.`,
+      );
     } catch (error) {
       writeStatus(error instanceof Error ? error.message : "Could not delete nasheed.");
     } finally {
@@ -426,6 +431,23 @@ export function LibraryPanel({ supabase, adminEmail }: LibraryPanelProps) {
               ))}
             </div>
           </>
+        ) : selected ? (
+          <div className="broken-library-item">
+            <span className="badge">Broken entry</span>
+            <h2>{selected.title}</h2>
+            <p>{selected.artist_name || "Unknown artist"}</p>
+            <div className="message error">The lyrics file could not be loaded. You can retry, hide the entry, or delete it even if its MP3, cover, or lyrics file is missing.</div>
+            <dl>
+              <div><dt>Database ID</dt><dd>{selected.id}</dd></div>
+              <div><dt>Lyrics URL</dt><dd>{selected.lyrics_json_url || "Missing"}</dd></div>
+              <div><dt>Audio URL</dt><dd>{selected.audio_url || "Missing"}</dd></div>
+            </dl>
+            <div className="button-row">
+              <button type="button" className="ghost-button" disabled={busy} onClick={() => loadLyrics(selected)}>Retry loading</button>
+              <button type="button" className="ghost-button" disabled={busy} onClick={() => togglePublished(selected)}>{selected.is_published ? "Hide nasheed" : "Make visible"}</button>
+              <button type="button" className="danger-button" disabled={busy} onClick={() => deleteNasheed(selected)}>Force delete</button>
+            </div>
+          </div>
         ) : <div className="library-placeholder"><h2>{busy ? "Loading…" : "Choose a nasheed"}</h2><p>Select a library item to edit its Arabic text and translations.</p></div>}
         <p className="status-text">{status}</p>
       </section>
