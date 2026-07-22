@@ -33,6 +33,10 @@ export function LibraryPanel({ supabase, adminEmail }: LibraryPanelProps) {
   const [coverFile, setCoverFile] = useState<File | null>(null);
   const [audioFile, setAudioFile] = useState<File | null>(null);
   const [playheadMs, setPlayheadMs] = useState(0);
+  const [syncLine, setSyncLine] = useState(0);
+  const [syncActive, setSyncActive] = useState(false);
+  const [libraryIsPlaying, setLibraryIsPlaying] = useState(false);
+  const [playbackRate, setPlaybackRate] = useState(1);
   const [status, setStatus] = useState("Ready.");
   const [busy, setBusy] = useState(false);
 
@@ -115,6 +119,9 @@ export function LibraryPanel({ supabase, adminEmail }: LibraryPanelProps) {
       const json = (await response.json()) as NushudContentJson;
       if (!Array.isArray(json.lines)) throw new Error("Lyrics JSON has no lines array.");
       setLyrics(json);
+      const firstUntimed = json.lines.findIndex((line) => line.endMs === null);
+      setSyncLine(firstUntimed < 0 ? json.lines.length : firstUntimed);
+      setSyncActive(false);
       setLanguage((current) => inferLanguages(json).includes(current) ? current : inferLanguages(json)[0] ?? "en");
       writeStatus(`Opened ${item.title}.`);
     } catch (error) {
@@ -146,6 +153,101 @@ export function LibraryPanel({ supabase, adminEmail }: LibraryPanelProps) {
     audio.currentTime = line.startMs / 1000;
     void audio.play();
   };
+
+  const seekAudio = (deltaMs: number) => {
+    if (!audioRef.current) return;
+    audioRef.current.currentTime = Math.max(0, audioRef.current.currentTime + deltaMs / 1000);
+    setPlayheadMs(Math.round(audioRef.current.currentTime * 1000));
+  };
+
+  const toggleLibraryPlay = () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (audio.paused) void audio.play(); else audio.pause();
+  };
+
+  const markFirstStart = () => {
+    if (!syncActive || !lyrics?.lines.length) return;
+    updateTiming(0, "startMs", playheadMs);
+    writeStatus(`First line starts at ${playheadMs} ms.`);
+  };
+
+  const markCurrentLineEnd = () => {
+    if (!syncActive || !lyrics || syncLine >= lyrics.lines.length) return;
+    const startMs = syncLine === 0 ? lyrics.lines[0].startMs : lyrics.lines[syncLine - 1].endMs ?? 0;
+    if (playheadMs < startMs) {
+      writeStatus(`Line ${syncLine + 1} cannot end before it starts.`);
+      return;
+    }
+    setLyrics((current) => current ? {
+      ...current,
+      lines: current.lines.map((line, index) => {
+        if (index === syncLine) return { ...line, startMs, endMs: playheadMs };
+        if (index === syncLine + 1) return { ...line, startMs: playheadMs };
+        return line;
+      }),
+    } : current);
+    setSyncLine((line) => Math.min(line + 1, lyrics.lines.length));
+  };
+
+  const undoLibraryTimestamp = () => {
+    if (!lyrics) return;
+    const index = Math.max(0, syncLine - 1);
+    updateTiming(index, "endMs", null);
+    setSyncLine(index);
+  };
+
+  const restartLibrarySync = () => {
+    audioRef.current?.pause();
+    if (audioRef.current) audioRef.current.currentTime = 0;
+    setPlayheadMs(0);
+    setLibraryIsPlaying(false);
+    setSyncLine(0);
+    setSyncActive(false);
+    setLyrics((current) => current ? {
+      ...current,
+      lines: current.lines.map((line, index) => ({ ...line, startMs: index === 0 ? 0 : 0, endMs: null })),
+    } : current);
+    writeStatus("Timestamps cleared locally. Start sync when ready.");
+  };
+
+  const startLibrarySync = () => {
+    if (!lyrics?.lines.length || !audioPreviewUrl) return;
+    const firstUntimed = lyrics.lines.findIndex((line) => line.endMs === null);
+    setSyncLine(firstUntimed < 0 ? lyrics.lines.length : firstUntimed);
+    setSyncActive(true);
+    void audioRef.current?.play();
+  };
+
+  const changePlaybackRate = (rate: number) => {
+    setPlaybackRate(rate);
+    if (audioRef.current) audioRef.current.playbackRate = rate;
+  };
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (!syncActive || isTypingTarget(event.target)) return;
+      if (event.key === "Enter") {
+        event.preventDefault();
+        markCurrentLineEnd();
+      } else if (event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        markFirstStart();
+      } else if (event.key === "Backspace") {
+        event.preventDefault();
+        undoLibraryTimestamp();
+      } else if (event.key === " ") {
+        event.preventDefault();
+        toggleLibraryPlay();
+      } else if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+        event.preventDefault();
+        const direction = event.key === "ArrowLeft" ? -1 : 1;
+        seekAudio(direction * (event.shiftKey ? 5000 : 1000));
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  });
 
   const updateSelectedMetadata = (patch: Partial<NasheedRecord>) => {
     if (!selected) return;
@@ -398,17 +500,37 @@ export function LibraryPanel({ supabase, adminEmail }: LibraryPanelProps) {
             <div className="library-audio-sync">
               <div>
                 <strong>Redo timestamps</strong>
-                <span>Play the audio, then capture the playhead for each line.</span>
+                <span>{syncActive ? `Enter marks line ${Math.min(syncLine + 1, lyrics.lines.length)} of ${lyrics.lines.length}` : "Start sync, then press Enter at each line ending."}</span>
               </div>
               <audio
                 ref={audioRef}
                 src={audioPreviewUrl}
                 controls
                 preload="metadata"
+                onLoadedMetadata={(event) => { event.currentTarget.playbackRate = playbackRate; }}
                 onTimeUpdate={(event) => setPlayheadMs(Math.round(event.currentTarget.currentTime * 1000))}
                 onSeeked={(event) => setPlayheadMs(Math.round(event.currentTarget.currentTime * 1000))}
+                onPlay={() => setLibraryIsPlaying(true)}
+                onPause={() => setLibraryIsPlaying(false)}
               />
               <output>{playheadMs.toLocaleString()} ms</output>
+              <div className="library-sync-controls">
+                <button type="button" className="primary-button" onClick={startLibrarySync}>Start sync</button>
+                <button type="button" onClick={toggleLibraryPlay}>{libraryIsPlaying ? "Pause" : "Play"}</button>
+                <button type="button" onClick={() => seekAudio(-1000)}>−1s</button>
+                <button type="button" onClick={() => seekAudio(1000)}>+1s</button>
+                <button type="button" onClick={() => seekAudio(-5000)}>−5s</button>
+                <button type="button" onClick={() => seekAudio(5000)}>+5s</button>
+                <button type="button" disabled={!syncActive} onClick={markFirstStart}>Mark first start (S)</button>
+                <button type="button" disabled={!syncActive || syncLine >= lyrics.lines.length} onClick={markCurrentLineEnd}>Mark line end (Enter)</button>
+                <button type="button" disabled={!syncActive} onClick={undoLibraryTimestamp}>Undo</button>
+                <button type="button" onClick={restartLibrarySync}>Restart</button>
+              </div>
+              <div className="playback-rate-controls" aria-label="Playback speed">
+                {[1, 1.5, 2, 2.5, 3, 4].map((rate) => (
+                  <button type="button" key={rate} className={playbackRate === rate ? "active" : ""} onClick={() => changePlaybackRate(rate)}>{rate}×</button>
+                ))}
+              </div>
             </div>
             <div className="language-tabs" aria-label="Translation language">
               {languages.map((code) => <button type="button" key={code} className={language === code ? "active" : ""} onClick={() => setLanguage(code)}>{code.toUpperCase()}</button>)}
@@ -416,7 +538,7 @@ export function LibraryPanel({ supabase, adminEmail }: LibraryPanelProps) {
             </div>
             <div className="lyrics-editor-list">
               {lyrics.lines.map((line, index) => (
-                <article className="lyrics-edit-row" key={line.lineIndex ?? index}>
+                <article className={`lyrics-edit-row ${syncActive && index === syncLine ? "sync-current" : ""}`} key={line.lineIndex ?? index}>
                   <span className="line-number">{index + 1}</span>
                   <label>Arabic<textarea dir="rtl" lang="ar" value={String(line.ar ?? "")} onChange={(event) => updateLine(index, "ar", event.target.value)} /></label>
                   <label>{language ? `${language.toUpperCase()} translation` : "Translation"}<textarea value={language ? String(line[language] ?? "") : ""} disabled={!language || languages.length === 0} onChange={(event) => updateLine(index, language, event.target.value)} /></label>
@@ -482,4 +604,10 @@ function slugify(value: string): string {
     .trim()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
+}
+
+function isTypingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  const tagName = target.tagName.toLowerCase();
+  return tagName === "input" || tagName === "textarea" || tagName === "select" || target.isContentEditable;
 }

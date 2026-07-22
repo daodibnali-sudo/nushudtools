@@ -25,12 +25,17 @@ type LyricsMetadata = {
 
 type DictionaryEntry = {
   word: string;
-  baseWord?: string;
   meaning: string[];
+  meaningRu?: string[];
   root?: string;
+  plural?: string;
+  imperative?: string;
+  present?: string;
   wazn?: string;
-  forms?: string;
-  bab?: string;
+  masculine?: string;
+  feminine?: string;
+  governs?: string;
+  literalMeaning?: string;
   partOfSpeech?: string;
   translations?: unknown;
   similars?: unknown;
@@ -50,6 +55,17 @@ type WordContext = {
 
 const dictionaryBucket = "dictionary";
 const dictionaryPath = "words.json";
+const typeFields: Record<string, Array<{ key: string; label: string }>> = {
+  noun: [{ key: "root", label: "Root" }, { key: "plural", label: "Plural" }],
+  verb: [{ key: "imperative", label: "Imperative" }, { key: "present", label: "Present" }, { key: "wazn", label: "Wazn" }],
+  adjective: [{ key: "masculine", label: "Masculine" }, { key: "feminine", label: "Feminine" }, { key: "plural", label: "Plural" }],
+  adverb: [],
+  pronoun: [],
+  particle: [],
+  preposition: [{ key: "governs", label: "Governs" }],
+  conjunction: [],
+  expression: [{ key: "literalMeaning", label: "Literal meaning" }],
+};
 
 export function AdminPanel({
   supabase,
@@ -272,15 +288,14 @@ export function AdminPanel({
                     <input value={entry.word} onChange={(event) => updateNewWordEntry(index, { word: event.target.value })} />
                   </label>
                   <label>
-                    Base word
-                    <input
-                      value={entry.baseWord ?? ""}
-                      onChange={(event) => updateNewWordEntry(index, { baseWord: event.target.value })}
-                      placeholder="لَيْل"
-                    />
+                    Part of speech
+                    <select value={entry.partOfSpeech ?? ""} onChange={(event) => updateNewWordEntry(index, { partOfSpeech: event.target.value })}>
+                      <option value="">(unclassified)</option>
+                      {Object.keys(typeFields).map((type) => <option key={type} value={type}>{type}</option>)}
+                    </select>
                   </label>
                   <label>
-                    Meanings
+                    Meanings (EN)
                     <input
                       value={entry.meaning.join(", ")}
                       onChange={(event) =>
@@ -291,37 +306,27 @@ export function AdminPanel({
                             .filter(Boolean),
                         })
                       }
-                      placeholder="he wrote, to write"
+                      placeholder="night, nighttime"
                     />
                   </label>
                   <label>
-                    Root
-                    <input value={entry.root ?? ""} onChange={(event) => updateNewWordEntry(index, { root: event.target.value })} />
-                  </label>
-                  <label>
-                    Wazn
-                    <input value={entry.wazn ?? ""} onChange={(event) => updateNewWordEntry(index, { wazn: event.target.value })} />
-                  </label>
-                  <label>
-                    Forms
+                    Meanings (RU)
                     <input
-                      value={entry.forms ?? ""}
-                      onChange={(event) => updateNewWordEntry(index, { forms: event.target.value })}
-                      placeholder="طَالَ، يَطُولُ"
+                      value={(entry.meaningRu ?? []).join(", ")}
+                      onChange={(event) => updateNewWordEntry(index, {
+                        meaningRu: event.target.value.split(",").map((meaning) => meaning.trim()).filter(Boolean),
+                      })}
                     />
                   </label>
-                  <label>
-                    Bab
-                    <input value={entry.bab ?? ""} onChange={(event) => updateNewWordEntry(index, { bab: event.target.value })} />
-                  </label>
-                  <label>
-                    Part of speech
-                    <input
-                      value={entry.partOfSpeech ?? ""}
-                      onChange={(event) => updateNewWordEntry(index, { partOfSpeech: event.target.value })}
-                      placeholder="verb, noun, particle"
-                    />
-                  </label>
+                  {(typeFields[entry.partOfSpeech ?? ""] ?? []).map((field) => (
+                    <label key={field.key}>
+                      {field.label}
+                      <input
+                        value={typeof entry[field.key] === "string" ? entry[field.key] as string : ""}
+                        onChange={(event) => updateNewWordEntry(index, { [field.key]: event.target.value })}
+                      />
+                    </label>
+                  ))}
                 </div>
               ))}
             </div>
@@ -568,12 +573,8 @@ function dictionaryFromEntries(entries: DictionaryEntry[]): Dictionary {
 function createDraftEntry(word: string): DictionaryEntry {
   return {
     word,
-    baseWord: "",
     meaning: [],
-    root: "",
-    wazn: "",
-    forms: "",
-    bab: "",
+    meaningRu: [],
     partOfSpeech: "",
   };
 }
@@ -590,6 +591,11 @@ function normalizeDictionaryEntry(value: unknown, fallbackWord = ""): Dictionary
     : typeof record.meaning === "string"
       ? [record.meaning.trim()].filter(Boolean)
       : [];
+  const meaningRu = Array.isArray(record.meaningRu)
+    ? record.meaningRu.map((item) => String(item).trim()).filter(Boolean)
+    : typeof record.meaningRu === "string"
+      ? [record.meaningRu.trim()].filter(Boolean)
+      : [];
 
   if (!word) {
     throw new Error("Each dictionary entry needs a word.");
@@ -598,12 +604,8 @@ function normalizeDictionaryEntry(value: unknown, fallbackWord = ""): Dictionary
   return {
     ...record,
     word,
-    baseWord: typeof record.baseWord === "string" ? record.baseWord : undefined,
     meaning,
-    root: typeof record.root === "string" ? record.root : undefined,
-    wazn: typeof record.wazn === "string" ? record.wazn : undefined,
-    forms: typeof record.forms === "string" ? record.forms : undefined,
-    bab: typeof record.bab === "string" ? record.bab : undefined,
+    meaningRu,
     partOfSpeech: typeof record.partOfSpeech === "string" ? record.partOfSpeech : undefined,
   };
 }
@@ -618,6 +620,7 @@ function mergeDictionaries(existingDictionary: Dictionary, newWords: Dictionary)
           ...existing,
           ...incoming,
           meaning: incoming.meaning.length > 0 ? incoming.meaning : existing.meaning,
+          meaningRu: (incoming.meaningRu ?? []).length > 0 ? incoming.meaningRu : existing.meaningRu,
         }
       : incoming;
   });
