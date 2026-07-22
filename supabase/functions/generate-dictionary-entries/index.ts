@@ -112,7 +112,7 @@ async function generateEntries(apiKey: string, model: string, words: WordContext
         {
           role: "system",
           content:
-            "You are an Arabic morphology assistant for a Classical Arabic learning app. First decide the single grammatical type of each word, then return only the fields that type needs — the response schema already forbids any other field, so do not try to add extra ones. Use the provided Arabic/English line context to identify the intended sense, not a literal translation of the whole line.",
+            "You are an Arabic morphology assistant for a Classical Arabic learning app. First decide the single grammatical type of each word. A conjugated finite verb, imperative, participial verb used verbally, or verb with attached particles must still be classified as verb and analyzed from its underlying lemma. Return only the fields that type needs — the response schema forbids any other field. Use the provided Arabic/English line context to identify the intended sense, not a literal translation of the whole line.",
         },
         {
           role: "user",
@@ -124,7 +124,8 @@ async function generateEntries(apiKey: string, model: string, words: WordContext
               "meaningRu: 2 to 4 short Russian glosses matching the same senses as meaning; empty array only if truly unsure.",
               "All Arabic values (word, root, plural, imperative, present, wazn, masculine, feminine) must include harakat/diacritics whenever known. Do not return unvocalized forms like فعل when the vocalized فَعَلَ is known.",
               "noun.root: root letters separated by spaces, e.g. ر ج ع. noun.plural: the plural noun form, or the singular form if the word itself is already the plural.",
-              "verb.imperative: the imperative form. verb.present: the present/imperfect form. verb.wazn: the verb's pattern, e.g. فَعَلَ or أَفْعَلَ.",
+              "For every verb, imperative, present, and wazn MUST contain real vocalized Arabic and must never be blank, a dash, or 'not applicable'. Derive them from the underlying dictionary verb even when word is a past, present, imperative, plural, feminine, passive, or has an attached particle.",
+              "verb.imperative: second-person masculine singular command, e.g. اُكْتُبْ. verb.present: third-person masculine singular present/imperfect, e.g. يَكْتُبُ. verb.wazn: the vocalized morphological pattern/form, e.g. فَعَلَ or أَفْعَلَ.",
               "adjective.masculine and adjective.feminine: the two gender forms. adjective.plural: the plural form.",
               "preposition.governs: a short label for what case/object it governs, e.g. \"genitive\" or \"object pronoun\".",
               "expression.literalMeaning: a short literal, word-for-word English rendering of the phrase, distinct from its idiomatic meaning.",
@@ -179,6 +180,10 @@ function normalizeEntry(value: unknown): DictionaryEntry {
   for (const field of typeFields[partOfSpeech]) {
     const fieldValue = typeof record[field] === "string" ? (record[field] as string).trim() : "";
     (entry as Record<string, unknown>)[field] = fieldValue;
+  }
+
+  if (partOfSpeech === "verb" && (!entry.imperative || !entry.present || !entry.wazn)) {
+    throw new Error(`AI returned incomplete verb forms for ${word}. Try regenerating this word.`);
   }
 
   return entry;
@@ -271,6 +276,11 @@ function posVariant(partOfSpeech: PartOfSpeech, extraProperties: Record<string, 
 }
 
 const arabicField = { type: "string", description: "Arabic with harakat when known, or empty string if not applicable." };
+const requiredVerbField = {
+  type: "string",
+  minLength: 1,
+  description: "Required vocalized Arabic form. Never empty and never use a dash or an N/A marker.",
+};
 
 const entriesJsonSchema = {
   name: "dictionary_entries",
@@ -283,7 +293,7 @@ const entriesJsonSchema = {
         items: {
           anyOf: [
             posVariant("noun", { root: arabicField, plural: arabicField }),
-            posVariant("verb", { imperative: arabicField, present: arabicField, wazn: arabicField }),
+            posVariant("verb", { imperative: requiredVerbField, present: requiredVerbField, wazn: requiredVerbField }),
             posVariant("adjective", { masculine: arabicField, feminine: arabicField, plural: arabicField }),
             posVariant("adverb"),
             posVariant("pronoun"),
