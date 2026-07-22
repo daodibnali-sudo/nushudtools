@@ -37,6 +37,8 @@ export function LibraryPanel({ supabase, adminEmail }: LibraryPanelProps) {
   const [syncActive, setSyncActive] = useState(false);
   const [libraryIsPlaying, setLibraryIsPlaying] = useState(false);
   const [playbackRate, setPlaybackRate] = useState(1);
+  const [repairJsonText, setRepairJsonText] = useState("");
+  const [loadError, setLoadError] = useState("");
   const [status, setStatus] = useState("Ready.");
   const [busy, setBusy] = useState(false);
 
@@ -114,9 +116,14 @@ export function LibraryPanel({ supabase, adminEmail }: LibraryPanelProps) {
   const loadLyrics = async (item: NasheedRecord) => {
     try {
       setBusy(true);
+      setLoadError("");
+      setRepairJsonText("");
+      if (!item.lyrics_json_url) throw new Error("Lyrics URL is missing.");
       const response = await fetch(item.lyrics_json_url, { cache: "no-store" });
       if (!response.ok) throw new Error(`Could not open lyrics (${response.status}).`);
-      const json = (await response.json()) as NushudContentJson;
+      const sourceText = await response.text();
+      setRepairJsonText(sourceText);
+      const json = JSON.parse(sourceText) as NushudContentJson;
       if (!Array.isArray(json.lines)) throw new Error("Lyrics JSON has no lines array.");
       setLyrics(json);
       const firstUntimed = json.lines.findIndex((line) => line.endMs === null);
@@ -126,7 +133,9 @@ export function LibraryPanel({ supabase, adminEmail }: LibraryPanelProps) {
       writeStatus(`Opened ${item.title}.`);
     } catch (error) {
       setLyrics(null);
-      writeStatus(error instanceof Error ? error.message : "Could not load lyrics.");
+      const message = error instanceof Error ? error.message : "Could not load lyrics.";
+      setLoadError(message);
+      writeStatus(message);
     } finally {
       setBusy(false);
     }
@@ -305,39 +314,90 @@ export function LibraryPanel({ supabase, adminEmail }: LibraryPanelProps) {
         cacheControl: "0",
       });
       if (error) throw new Error(error.message);
+      let coverUrl = selected.cover_url;
+      let audioUrl = selected.audio_url;
       if (coverFile) {
-        const coverPath = storagePath(selected.cover_url);
-        if (!coverPath) throw new Error("Could not determine the existing cover image path.");
+        const coverPath = storagePath(selected.cover_url) ?? `${lyrics.id || selected.id}.${fileExtension(coverFile.name, "jpg")}`;
         const { error: coverError } = await supabase.storage.from("nasheed-covers").upload(coverPath, coverFile, {
           upsert: true,
           contentType: coverFile.type || undefined,
           cacheControl: "0",
         });
         if (coverError) throw new Error(`Lyrics saved, but cover could not be replaced: ${coverError.message}`);
+        coverUrl = supabase.storage.from("nasheed-covers").getPublicUrl(coverPath).data.publicUrl;
       }
       if (audioFile) {
-        const audioPath = storagePath(selected.audio_url);
-        if (!audioPath) throw new Error("Could not determine the existing MP3 path.");
+        const audioPath = storagePath(selected.audio_url) ?? `${lyrics.id || selected.id}.mp3`;
         const { error: audioError } = await supabase.storage.from("nasheed-audio").upload(audioPath, audioFile, {
           upsert: true,
           contentType: audioFile.type || "audio/mpeg",
           cacheControl: "0",
         });
         if (audioError) throw new Error(`Other changes saved, but MP3 could not be replaced: ${audioError.message}`);
+        audioUrl = supabase.storage.from("nasheed-audio").getPublicUrl(audioPath).data.publicUrl;
       }
       const { error: rowError } = await supabase.from("nasheeds").update({
         title: selected.title.trim(),
         artist_name: selected.artist_name.trim(),
         difficulty: selected.difficulty,
         tags: selected.tags ?? [],
+        cover_url: coverUrl,
+        audio_url: audioUrl,
       }).eq("id", selected.id);
       if (rowError) throw new Error(`Lyrics saved, but metadata could not be saved: ${rowError.message}`);
       setLyrics(normalized);
+      setItems((current) => current.map((item) => item.id === selected.id ? { ...item, cover_url: coverUrl, audio_url: audioUrl } : item));
       setCoverFile(null);
       setAudioFile(null);
       writeStatus(`Saved metadata${coverFile ? ", cover image" : ""}${audioFile ? ", MP3" : ""}, Arabic, timestamps, and ${languages.length} translation language${languages.length === 1 ? "" : "s"}.`);
     } catch (error) {
       writeStatus(error instanceof Error ? error.message : "Could not save lyrics.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const repairBrokenEntry = async () => {
+    if (!selected) return;
+    try {
+      setBusy(true);
+      const parsed = JSON.parse(repairJsonText) as NushudContentJson;
+      if (!Array.isArray(parsed.lines) || parsed.lines.length === 0) throw new Error("Replacement JSON needs a non-empty lines array.");
+      const repaired = normalizeRepairJson(parsed, selected);
+      const slug = repaired.id || selected.id;
+      const lyricsPath = storagePath(selected.lyrics_json_url) ?? `${slug}.json`;
+      const lyricsBlob = new Blob([JSON.stringify(repaired, null, 2)], { type: "application/json" });
+      const { error: lyricsError } = await supabase.storage.from("nasheed-lyrics").upload(lyricsPath, lyricsBlob, { upsert: true, contentType: "application/json", cacheControl: "0" });
+      if (lyricsError) throw new Error(`Could not save repaired lyrics: ${lyricsError.message}`);
+      const lyricsUrl = supabase.storage.from("nasheed-lyrics").getPublicUrl(lyricsPath).data.publicUrl;
+
+      let audioUrl = selected.audio_url;
+      if (audioFile) {
+        const audioPath = storagePath(audioUrl) ?? `${slug}.mp3`;
+        const { error } = await supabase.storage.from("nasheed-audio").upload(audioPath, audioFile, { upsert: true, contentType: audioFile.type || "audio/mpeg", cacheControl: "0" });
+        if (error) throw new Error(`Could not save MP3: ${error.message}`);
+        audioUrl = supabase.storage.from("nasheed-audio").getPublicUrl(audioPath).data.publicUrl;
+      }
+      let coverUrl = selected.cover_url;
+      if (coverFile) {
+        const coverPath = storagePath(coverUrl) ?? `${slug}.${fileExtension(coverFile.name, "jpg")}`;
+        const { error } = await supabase.storage.from("nasheed-covers").upload(coverPath, coverFile, { upsert: true, contentType: coverFile.type || undefined, cacheControl: "0" });
+        if (error) throw new Error(`Could not save cover: ${error.message}`);
+        coverUrl = supabase.storage.from("nasheed-covers").getPublicUrl(coverPath).data.publicUrl;
+      }
+      const { error: rowError } = await supabase.from("nasheeds").update({
+        title: selected.title.trim(), artist_name: selected.artist_name.trim(), difficulty: selected.difficulty,
+        tags: selected.tags ?? [], lyrics_json_url: lyricsUrl, audio_url: audioUrl, cover_url: coverUrl,
+      }).eq("id", selected.id);
+      if (rowError) throw new Error(`Could not update library record: ${rowError.message}`);
+      setItems((current) => current.map((item) => item.id === selected.id ? { ...item, lyrics_json_url: lyricsUrl, audio_url: audioUrl, cover_url: coverUrl } : item));
+      setLyrics(repaired);
+      setLoadError("");
+      setCoverFile(null);
+      setAudioFile(null);
+      writeStatus(`${selected.title} was repaired and can now be edited normally.`);
+    } catch (error) {
+      writeStatus(error instanceof Error ? error.message : "Could not repair this nasheed.");
     } finally {
       setBusy(false);
     }
@@ -558,13 +618,34 @@ export function LibraryPanel({ supabase, adminEmail }: LibraryPanelProps) {
             <span className="badge">Broken entry</span>
             <h2>{selected.title}</h2>
             <p>{selected.artist_name || "Unknown artist"}</p>
-            <div className="message error">The lyrics file could not be loaded. You can retry, hide the entry, or delete it even if its MP3, cover, or lyrics file is missing.</div>
+            <div className="message error">{loadError || "The lyrics file could not be loaded."} Repair the files or metadata below, then save.</div>
+            <div className="library-metadata-grid repair-metadata-grid">
+              <label>Title<input value={selected.title} onChange={(event) => updateSelectedMetadata({ title: event.target.value })} /></label>
+              <label>Author / artist<input value={selected.artist_name} onChange={(event) => updateSelectedMetadata({ artist_name: event.target.value })} /></label>
+              <label>Difficulty<select value={selected.difficulty} onChange={(event) => updateSelectedMetadata({ difficulty: event.target.value })}><option value="beginner">Beginner</option><option value="intermediate">Intermediate</option><option value="advanced">Advanced</option></select></label>
+              <label>Tags<input value={(selected.tags ?? []).join(", ")} onChange={(event) => updateSelectedMetadata({ tags: event.target.value.split(",").map((tag) => tag.trim()).filter(Boolean) })} /></label>
+              <label>Replacement MP3<input type="file" accept="audio/mpeg,.mp3" onChange={(event) => setAudioFile(event.target.files?.[0] ?? null)} /><span>{audioFile?.name ?? "Optional unless audio is missing"}</span></label>
+              <label>Replacement cover<input type="file" accept="image/*" onChange={(event) => setCoverFile(event.target.files?.[0] ?? null)} /><span>{coverFile?.name ?? "Optional unless cover is missing"}</span></label>
+            </div>
+            <label>
+              Repair lyrics JSON
+              <textarea className="repair-json-textarea" value={repairJsonText} onChange={(event) => setRepairJsonText(event.target.value)} placeholder={'{"id":"slug","title":"Title","artist":"Artist","lines":[{"ar":"..."}]}'}/>
+            </label>
+            <label className="file-box compact-file-box">
+              Or upload replacement JSON
+              <input type="file" accept="application/json,.json" onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) void file.text().then(setRepairJsonText);
+              }} />
+              <span>The replacement may be untimed; you can redo timestamps after repair.</span>
+            </label>
             <dl>
               <div><dt>Database ID</dt><dd>{selected.id}</dd></div>
               <div><dt>Lyrics URL</dt><dd>{selected.lyrics_json_url || "Missing"}</dd></div>
               <div><dt>Audio URL</dt><dd>{selected.audio_url || "Missing"}</dd></div>
             </dl>
             <div className="button-row">
+              <button type="button" className="primary-button" disabled={busy || !repairJsonText.trim()} onClick={repairBrokenEntry}>Save repaired entry</button>
               <button type="button" className="ghost-button" disabled={busy} onClick={() => loadLyrics(selected)}>Retry loading</button>
               <button type="button" className="ghost-button" disabled={busy} onClick={() => togglePublished(selected)}>{selected.is_published ? "Hide nasheed" : "Make visible"}</button>
               <button type="button" className="danger-button" disabled={busy} onClick={() => deleteNasheed(selected)}>Force delete</button>
@@ -610,4 +691,34 @@ function isTypingTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   const tagName = target.tagName.toLowerCase();
   return tagName === "input" || tagName === "textarea" || tagName === "select" || target.isContentEditable;
+}
+
+function normalizeRepairJson(json: NushudContentJson, item: NasheedRecord): NushudContentJson {
+  const lines = json.lines.map((line, index) => {
+    if (typeof line.ar !== "string") throw new Error(`Line ${index + 1} needs Arabic text in ar.`);
+    return {
+      ...line,
+      lineIndex: index,
+      startMs: Number.isFinite(Number(line.startMs)) ? Number(line.startMs) : 0,
+      endMs: line.endMs !== null && line.endMs !== undefined && Number.isFinite(Number(line.endMs)) ? Number(line.endMs) : null,
+    };
+  });
+  const languages = Array.from(new Set(["ar", ...(json.languages ?? []), ...lines.flatMap((line) => Object.keys(line).filter((key) => !structuralKeys.has(key))) ]));
+  return {
+    ...json,
+    id: String(json.id || item.id).trim(),
+    title: String(json.title || item.title).trim(),
+    artist: String(json.artist || item.artist_name).trim(),
+    difficulty: json.difficulty === "intermediate" || json.difficulty === "advanced" ? json.difficulty : "beginner",
+    tags: Array.isArray(json.tags) ? json.tags : [],
+    audioFileName: String(json.audioFileName || ""),
+    lineCount: lines.length,
+    languages,
+    lines,
+  };
+}
+
+function fileExtension(fileName: string, fallback: string): string {
+  const extension = fileName.split(".").pop()?.toLowerCase().replace(/[^a-z0-9]/g, "");
+  return extension || fallback;
 }

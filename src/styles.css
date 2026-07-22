@@ -196,6 +196,8 @@ label {
 .broken-library-item dl div { display: grid; grid-template-columns: 8rem minmax(0, 1fr); gap: 0.75rem; border-bottom: 1px solid #2a2a2a; padding-bottom: 0.6rem; }
 .broken-library-item dt { color: #a1a1aa; }
 .broken-library-item dd { margin: 0; overflow-wrap: anywhere; }
+.repair-metadata-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.repair-json-textarea { min-height: 18rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.8rem; }
 .success-badge { border-color: #256d46; color: #86efac; }
 
 @media (max-width: 850px) {
