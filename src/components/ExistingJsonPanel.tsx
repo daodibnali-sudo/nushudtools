@@ -21,16 +21,16 @@ export function ExistingJsonPanel({ existingJsonFileName, existingJson, onJsonUp
     <section className="panel">
       <div className="panel-heading">
         <h2>Already Have JSON?</h2>
-        <p>Skip syncing and publish it</p>
+        <p>Load its text, translations, and any existing timing</p>
       </div>
       <label className="file-box drop-zone compact-file-box" onDragOver={(event) => event.preventDefault()} onDrop={handleJsonDrop}>
-        Timed lyrics JSON
+        Lyrics JSON (timestamps optional)
         <input
           type="file"
           accept="application/json,.json"
           onChange={(event) => onJsonUpload(event.target.files?.[0] ?? null)}
         />
-        <span>{existingJsonFileName || "Choose an existing timed lyrics JSON."}</span>
+        <span>{existingJsonFileName || "Choose a lyrics JSON. TXT files are not needed."}</span>
       </label>
       {existingJson && (
         <div className="metadata-preview existing-json-preview">

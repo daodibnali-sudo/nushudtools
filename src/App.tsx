@@ -216,10 +216,40 @@ function App() {
     }
 
     try {
-      const json = JSON.parse(await file.text()) as NushudContentJson;
-      validateExistingContentJson(json);
+      const importedJson = JSON.parse(await file.text()) as NushudContentJson;
+      validateExistingContentJson(importedJson);
+      const json = normalizeExistingContentJson(importedJson);
+      const importedLanguages = Array.from(new Set([
+        ...(json.languages ?? []),
+        ...inferLanguages(json.lines),
+      ])).filter((code) => code !== "ar");
+      const importedArabicLines = json.lines.map((line) => line.ar);
+      const importedTimestamps = json.lines.map((line) => line.endMs);
+
       setExistingContentJson(json);
       setMetadata((current) => metadataFromExistingJson(json, current));
+      setArabicFileName(file.name);
+      setArabicLines(importedArabicLines);
+      setArabicSourceText(importedArabicLines.join("\n"));
+      setTranslations(
+        importedLanguages.map((languageCode) => {
+          const lines = json.lines.map((line) => String(line[languageCode] ?? ""));
+          return {
+            id: `imported-${languageCode}`,
+            fileName: `JSON · ${languageCode.toUpperCase()}`,
+            languageCode,
+            sourceText: lines.join("\n"),
+            lines,
+          };
+        }),
+      );
+      setTimestamps(importedTimestamps);
+      setFirstLineStartMs(json.lines[0]?.startMs ?? null);
+      setCurrentLine(importedTimestamps.findIndex((timestamp) => timestamp === null) < 0
+        ? importedTimestamps.length
+        : importedTimestamps.findIndex((timestamp) => timestamp === null));
+      setSyncStarted(false);
+      setRuntimeWarnings([]);
     } catch (error) {
       setExistingContentJson(null);
       setExistingJsonError(error instanceof Error ? error.message : "Existing JSON is not valid.");
@@ -457,7 +487,16 @@ function App() {
   }, [arabicLines.length, firstLineStartMs, timestamps, translations, validationMessages]);
 
   const contentJson = useMemo(() => {
-    if (existingContentJson) return completeExistingContentJson(existingContentJson, metadata);
+    if (existingContentJson) {
+      return completeExistingContentJson(
+        existingContentJson,
+        metadata,
+        arabicLines,
+        translations,
+        timestamps,
+        firstLineStartMs ?? 0,
+      );
+    }
     if (!audioFile || arabicLines.length === 0) return null;
 
     return buildContentJson({
@@ -580,6 +619,7 @@ function App() {
               arabicText={arabicSourceText}
               translations={translations}
               keepEmptyLines={keepEmptyLines}
+              hasImportedJson={existingContentJson !== null}
               onAudioUpload={setAudioFile}
               onArabicUpload={loadArabicFile}
               onArabicTextChange={loadArabicText}
@@ -673,10 +713,31 @@ function validateExistingContentJson(json: NushudContentJson) {
       throw new Error(`Line ${index + 1} needs ar.`);
     }
 
-    if (!Number.isFinite(line.startMs) || line.endMs !== null && !Number.isFinite(line.endMs)) {
+    if (
+      line.startMs !== undefined && line.startMs !== null && !Number.isFinite(Number(line.startMs)) ||
+      line.endMs !== undefined && line.endMs !== null && !Number.isFinite(Number(line.endMs))
+    ) {
       throw new Error(`Line ${index + 1} has invalid timing.`);
     }
   });
+}
+
+function normalizeExistingContentJson(json: NushudContentJson): NushudContentJson {
+  const lines = json.lines.map((line, index) => ({
+    ...line,
+    lineIndex: Number.isFinite(Number(line.lineIndex)) ? Number(line.lineIndex) : index,
+    startMs: Number.isFinite(Number(line.startMs)) ? Number(line.startMs) : 0,
+    endMs: line.endMs !== undefined && line.endMs !== null && Number.isFinite(Number(line.endMs))
+      ? Number(line.endMs)
+      : null,
+  }));
+
+  return {
+    ...json,
+    lineCount: lines.length,
+    languages: Array.isArray(json.languages) ? json.languages : inferLanguages(lines),
+    lines,
+  };
 }
 
 function metadataFromExistingJson(json: NushudContentJson, current: Metadata): Metadata {
@@ -700,11 +761,31 @@ function metadataFromExistingJson(json: NushudContentJson, current: Metadata): M
   };
 }
 
-function completeExistingContentJson(json: NushudContentJson, metadata: Metadata): NushudContentJson {
+function completeExistingContentJson(
+  json: NushudContentJson,
+  metadata: Metadata,
+  arabicLines: string[],
+  translations: UploadedTextFile[],
+  timestamps: Array<number | null>,
+  firstLineStartMs: number,
+): NushudContentJson {
   const record = json as unknown as Record<string, unknown>;
-  const languages = Array.isArray(record.languages)
-    ? record.languages.filter((language): language is string => typeof language === "string")
-    : inferLanguages(json.lines);
+  const activeTranslations = translations.filter((translation) => translation.languageCode.trim());
+  const languages = ["ar", ...Array.from(new Set(activeTranslations.map((translation) => translation.languageCode.trim().toLowerCase())))];
+  const lines = arabicLines.map((ar, index) => {
+    const existingLine = json.lines[index] ?? {};
+    const line: NushudContentJson["lines"][number] = {
+      ...existingLine,
+      lineIndex: index,
+      startMs: index === 0 ? firstLineStartMs : timestamps[index - 1] ?? 0,
+      endMs: timestamps[index] ?? null,
+      ar,
+    };
+    activeTranslations.forEach((translation) => {
+      line[translation.languageCode.trim().toLowerCase()] = translation.lines[index] ?? "";
+    });
+    return line;
+  });
 
   return {
     ...json,
@@ -714,8 +795,9 @@ function completeExistingContentJson(json: NushudContentJson, metadata: Metadata
     difficulty: metadata.difficulty,
     tags: metadata.tags.split(",").map((tag) => tag.trim()).filter(Boolean),
     audioFileName: typeof record.audioFileName === "string" ? record.audioFileName : "",
-    lineCount: json.lines.length,
+    lineCount: lines.length,
     languages,
+    lines,
   };
 }
 
