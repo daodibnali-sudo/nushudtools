@@ -33,7 +33,6 @@ export function LibraryPanel({ supabase, adminEmail }: LibraryPanelProps) {
   const [coverFile, setCoverFile] = useState<File | null>(null);
   const [audioFile, setAudioFile] = useState<File | null>(null);
   const [playheadMs, setPlayheadMs] = useState(0);
-  const [playbackRate, setPlaybackRate] = useState(1);
   const [status, setStatus] = useState("Ready.");
   const [busy, setBusy] = useState(false);
 
@@ -146,11 +145,6 @@ export function LibraryPanel({ supabase, adminEmail }: LibraryPanelProps) {
     if (!audio || !line) return;
     audio.currentTime = line.startMs / 1000;
     void audio.play();
-  };
-
-  const changePlaybackRate = (rate: number) => {
-    setPlaybackRate(rate);
-    if (audioRef.current) audioRef.current.playbackRate = rate;
   };
 
   const updateSelectedMetadata = (patch: Partial<NasheedRecord>) => {
@@ -411,23 +405,10 @@ export function LibraryPanel({ supabase, adminEmail }: LibraryPanelProps) {
                 src={audioPreviewUrl}
                 controls
                 preload="metadata"
-                onLoadedMetadata={(event) => { event.currentTarget.playbackRate = playbackRate; }}
                 onTimeUpdate={(event) => setPlayheadMs(Math.round(event.currentTarget.currentTime * 1000))}
                 onSeeked={(event) => setPlayheadMs(Math.round(event.currentTarget.currentTime * 1000))}
               />
               <output>{playheadMs.toLocaleString()} ms</output>
-              <div className="playback-rate-controls" aria-label="Playback speed">
-                {[1, 1.5, 2, 2.5, 3, 4].map((rate) => (
-                  <button
-                    type="button"
-                    key={rate}
-                    className={playbackRate === rate ? "active" : ""}
-                    onClick={() => changePlaybackRate(rate)}
-                  >
-                    {rate}×
-                  </button>
-                ))}
-              </div>
             </div>
             <div className="language-tabs" aria-label="Translation language">
               {languages.map((code) => <button type="button" key={code} className={language === code ? "active" : ""} onClick={() => setLanguage(code)}>{code.toUpperCase()}</button>)}
