@@ -592,6 +592,53 @@ export function LibraryPanel({ supabase, adminEmail }: LibraryPanelProps) {
                 ))}
               </div>
             </div>
+            <section className="library-sync-preview">
+              <div className="panel-heading">
+                <div>
+                  <h2>Sync Preview</h2>
+                  <p>{lyrics.lines.filter((line) => line.endMs !== null).length} of {lyrics.lines.length} marked</p>
+                </div>
+                <div className="sync-preview-language">
+                  <select value={language} onChange={(event) => setLanguage(event.target.value)} aria-label="Preview translation language">
+                    {languages.map((code) => <option value={code} key={code}>{code.toUpperCase()}</option>)}
+                  </select>
+                  <button type="button" className="ghost-button" onClick={addLanguage}>Add translation</button>
+                </div>
+              </div>
+              <div className="context-lines">
+                <div>
+                  <span>Previous</span>
+                  <p dir="rtl">{syncLine > 0 ? lyrics.lines[syncLine - 1]?.ar : "..."}</p>
+                </div>
+                <div className="current-preview">
+                  <span>Current Arabic · line {Math.min(syncLine + 1, lyrics.lines.length)}</span>
+                  <p dir="rtl">{lyrics.lines[syncLine]?.ar || "All lines complete"}</p>
+                </div>
+                <div>
+                  <span>Next</span>
+                  <p dir="rtl">{lyrics.lines[syncLine + 1]?.ar || "..."}</p>
+                </div>
+              </div>
+              {syncLine < lyrics.lines.length && language && (
+                <div className="focused-translation-editor">
+                  <label>
+                    Current {language.toUpperCase()} translation
+                    <textarea
+                      value={String(lyrics.lines[syncLine]?.[language] ?? "")}
+                      onChange={(event) => updateLine(syncLine, language, event.target.value)}
+                      placeholder={`Add the ${language.toUpperCase()} translation for this line`}
+                    />
+                  </label>
+                  <div>
+                    <span>Next {language.toUpperCase()}</span>
+                    <p>{String(lyrics.lines[syncLine + 1]?.[language] ?? "...")}</p>
+                  </div>
+                </div>
+              )}
+              {languages.length === 0 && (
+                <div className="message warning">No translation language yet. Use Add translation to create English or another language.</div>
+              )}
+            </section>
             <div className="language-tabs" aria-label="Translation language">
               {languages.map((code) => <button type="button" key={code} className={language === code ? "active" : ""} onClick={() => setLanguage(code)}>{code.toUpperCase()}</button>)}
               {languages.length === 0 && <span>No translations yet — add a language to begin.</span>}
