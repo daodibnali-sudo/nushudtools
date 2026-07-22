@@ -501,6 +501,22 @@ function App() {
       return;
     }
 
+    const incompleteLine = contentJson.lines.findIndex((line) => line.endMs === null || !Number.isFinite(line.endMs));
+    if (incompleteLine >= 0) {
+      setContinueMessage(
+        `Finish timestamping line ${incompleteLine + 1} before continuing. Every line needs an end time for publishing.`,
+      );
+      return;
+    }
+
+    const invalidLine = contentJson.lines.findIndex(
+      (line) => !Number.isFinite(line.startMs) || Number(line.endMs) < line.startMs,
+    );
+    if (invalidLine >= 0) {
+      setContinueMessage(`Line ${invalidLine + 1} has invalid timing. Its end time must be after its start time.`);
+      return;
+    }
+
     setWorkflowStep("publish");
   }, [audioFile, contentJson]);
 

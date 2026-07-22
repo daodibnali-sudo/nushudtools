@@ -469,7 +469,11 @@ function validateLyricsJson(json: NushudContentJson) {
     throw new Error(`lineCount says ${json.lineCount}, but lines has ${json.lines.length}.`);
   }
 
-  getLyricsMetadata(json);
+  const metadata = getLyricsMetadata(json);
+  const missing = getMissingMetadata(metadata);
+  if (missing.length > 0) {
+    throw new Error(`Lyrics JSON missing metadata: ${missing.join(", ")}`);
+  }
 }
 
 function getLyricsMetadata(json: NushudContentJson): LyricsMetadata {
@@ -482,17 +486,6 @@ function getLyricsMetadata(json: NushudContentJson): LyricsMetadata {
   const audioFileName = String(record.audioFileName ?? record.audio_file_name ?? "").trim();
   const durationMs = getDurationMs(json);
 
-  const missing = [
-    !slug && "id or slug",
-    !title && "title",
-    !artistName && "artist",
-    !durationMs && "duration from durationMs or line endMs",
-  ].filter(Boolean);
-
-  if (missing.length > 0) {
-    throw new Error(`Lyrics JSON missing metadata: ${missing.join(", ")}`);
-  }
-
   return {
     slug,
     title,
@@ -504,6 +497,15 @@ function getLyricsMetadata(json: NushudContentJson): LyricsMetadata {
     lineCount: json.lines.length,
     languages: Array.isArray(json.languages) ? json.languages : [],
   };
+}
+
+function getMissingMetadata(metadata: LyricsMetadata): string[] {
+  return [
+    !metadata.slug && "id or slug",
+    !metadata.title && "title",
+    !metadata.artistName && "artist",
+    !metadata.durationMs && "duration from durationMs or line endMs",
+  ].filter((value): value is string => Boolean(value));
 }
 
 function getDurationMs(json: NushudContentJson): number {
