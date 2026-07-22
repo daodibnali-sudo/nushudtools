@@ -173,6 +173,9 @@ label {
 .library-audio-sync > div { display: grid; gap: 0.25rem; }
 .library-audio-sync span, .library-audio-sync output { color: #a1a1aa; font-size: 0.82rem; }
 .library-audio-sync audio { width: 100%; height: 2.6rem; }
+.playback-rate-controls { grid-column: 1 / -1; display: flex !important; flex-wrap: wrap; gap: 0.4rem !important; }
+.playback-rate-controls button { min-height: 2rem; padding: 0.35rem 0.7rem; background: #181818; color: #a1a1aa; }
+.playback-rate-controls button.active { border-color: #a97b3d; background: rgba(169, 123, 61, 0.16); color: #c99a55; font-weight: 800; }
 .lyrics-editor-list { display: grid; gap: 0.65rem; max-height: 66vh; overflow: auto; padding-right: 0.35rem; }
 .lyrics-edit-row { display: grid; grid-template-columns: 2.5rem minmax(0, 1fr) minmax(0, 1fr); gap: 0.65rem; align-items: start; border: 1px solid #252525; border-radius: 8px; padding: 0.65rem; background: #111; }
 .lyrics-edit-row textarea { min-height: 5.2rem; resize: vertical; line-height: 1.55; }
