@@ -90,7 +90,7 @@ export function DictionaryPanel({ supabase, adminEmail }: DictionaryPanelProps) 
     const normalizedNeedle = normalizeArabicWord(query);
 
     return entries.filter(([key, entry]) => {
-      if (showMissingMeaningsOnly && entry.meaning.length > 0) return false;
+      if (showMissingMeaningsOnly && getMissingEntryFields(entry).length === 0) return false;
       if (!needle && !normalizedNeedle) return true;
 
       const haystack = [
@@ -108,8 +108,8 @@ export function DictionaryPanel({ supabase, adminEmail }: DictionaryPanelProps) 
     });
   }, [entries, query, showMissingMeaningsOnly]);
 
-  const missingMeaningEntries = useMemo(
-    () => entries.filter(([, entry]) => entry.meaning.length === 0),
+  const incompleteEntries = useMemo(
+    () => entries.filter(([, entry]) => getMissingEntryFields(entry).length > 0),
     [entries],
   );
 
@@ -248,7 +248,7 @@ export function DictionaryPanel({ supabase, adminEmail }: DictionaryPanelProps) 
   };
 
   const fillMissingMeaningsWithAi = async () => {
-    const missingWords = missingMeaningEntries.map(([, entry]) => ({
+    const missingWords = incompleteEntries.map(([, entry]) => ({
       word: entry.word,
       normalizedWord: normalizeArabicWord(entry.word),
       lines: [],
@@ -269,17 +269,59 @@ export function DictionaryPanel({ supabase, adminEmail }: DictionaryPanelProps) 
     }
 
     const confirmed = window.confirm(
-      `Regenerate all ${entries.length} words with AI? This overwrites every entry's fields ` +
-        "(old ones like baseWord/wazn/forms/bab get replaced by the new schema). Review suggestions before saving.",
+      `Fully rebuild and save all ${entries.length} words with AI? Every entry will be replaced. ` +
+        "The dictionary will only be saved if every required field is filled.",
     );
 
     if (!confirmed) {
       return;
     }
 
-    await fillWordsWithAi(
-      entries.map(([, entry]) => ({ word: entry.word, normalizedWord: normalizeArabicWord(entry.word), lines: [] })),
-    );
+    const allWords = entries.map(([, entry]) => ({ word: entry.word, normalizedWord: normalizeArabicWord(entry.word), lines: [] }));
+    const rebuilt = new Map<string, DictionaryEntry>();
+    let pending = [...allWords];
+
+    try {
+      setIsFilling(true);
+      setSuggestions([]);
+
+      for (let attempt = 1; attempt <= 3 && pending.length > 0; attempt += 1) {
+        const retryWords = [...pending];
+        pending = [];
+        const rebuildBatchSize = 20;
+
+        for (let start = 0; start < retryWords.length; start += rebuildBatchSize) {
+          const batch = retryWords.slice(start, start + rebuildBatchSize);
+          writeStatus(`Full rebuild attempt ${attempt}/3: ${rebuilt.size} complete, processing ${batch.length} words...`);
+          try {
+            const generated = await requestAiDictionaryEntries(supabase, batch);
+            const generatedByKey = new Map(generated.map((entry) => [normalizeArabicWord(entry.word), entry]));
+            batch.forEach((context) => {
+              const entry = generatedByKey.get(context.normalizedWord);
+              if (entry && getMissingEntryFields(entry).length === 0) rebuilt.set(context.normalizedWord, entry);
+              else pending.push(context);
+            });
+          } catch {
+            pending.push(...batch);
+          }
+        }
+      }
+
+      if (pending.length > 0 || rebuilt.size !== allWords.length) {
+        const failed = pending.slice(0, 12).map((context) => context.word).join(", ");
+        throw new Error(`Nothing was saved. AI could not fully complete ${pending.length} word(s) after 3 attempts: ${failed}${pending.length > 12 ? "…" : ""}`);
+      }
+
+      const rebuiltDictionary = Object.fromEntries(rebuilt);
+      await uploadDictionary(supabase, rebuiltDictionary);
+      setDictionary(rebuiltDictionary);
+      setSelectedKey(Object.keys(rebuiltDictionary)[0] ?? "");
+      writeStatus(`Complete: regenerated, verified, and saved all ${rebuilt.size} entries. No required fields are blank.`);
+    } catch (error) {
+      writeStatus(error instanceof Error ? error.message : "Full dictionary rebuild failed. Nothing was saved.");
+    } finally {
+      setIsFilling(false);
+    }
   };
 
   const aiBatchSize = 100;
@@ -409,7 +451,7 @@ export function DictionaryPanel({ supabase, adminEmail }: DictionaryPanelProps) 
               checked={showMissingMeaningsOnly}
               onChange={(event) => setShowMissingMeaningsOnly(event.target.checked)}
             />
-            Missing meanings only ({missingMeaningEntries.length})
+            Incomplete entries only ({incompleteEntries.length})
           </label>
           <div className="button-row">
             <button type="button" className="ghost-button" onClick={loadDictionary} disabled={isLoading}>
@@ -556,7 +598,7 @@ export function DictionaryPanel({ supabase, adminEmail }: DictionaryPanelProps) 
             AI check visible list
           </button>
           <button type="button" className="primary-button" onClick={fillMissingMeaningsWithAi} disabled={isFilling}>
-            {isFilling ? "Asking AI..." : `Fill all missing meanings (${missingMeaningEntries.length})`}
+            {isFilling ? "Asking AI..." : `Fill all incomplete entries (${incompleteEntries.length})`}
           </button>
           <button type="button" className="ghost-button" onClick={regenerateAllWithAi} disabled={isFilling}>
             {isFilling ? "Asking AI..." : `Regenerate ALL entries (${entries.length})`}
@@ -736,6 +778,21 @@ function normalizeDictionaryEntry(value: unknown, fallbackWord = ""): Dictionary
   });
 
   return entry;
+}
+
+function getMissingEntryFields(entry: DictionaryEntry): string[] {
+  const missing: string[] = [];
+  if (!entry.word.trim()) missing.push("word");
+  if (!entry.partOfSpeech || !(entry.partOfSpeech in typeFields)) missing.push("partOfSpeech");
+  if (entry.meaning.length < 2) missing.push("meaning");
+  if ((entry.meaningRu ?? []).length < 2) missing.push("meaningRu");
+  (typeFields[entry.partOfSpeech ?? ""] ?? []).forEach((field) => {
+    const value = String(entry[field.key] ?? "").trim().toLowerCase();
+    if (!value || value === "-" || value === "—" || value === "n/a" || value === "unknown" || value === "?") {
+      missing.push(field.key);
+    }
+  });
+  return missing;
 }
 
 function asStringArray(value: unknown): string[] {
