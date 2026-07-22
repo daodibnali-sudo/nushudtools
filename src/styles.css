@@ -123,6 +123,10 @@ label {
   gap: 0.75rem;
 }
 
+.build-version { display: grid; gap: 0.15rem; color: #a1a1aa; font-size: 0.7rem; text-align: right; white-space: nowrap; }
+.build-version span { text-transform: uppercase; letter-spacing: 0.08em; }
+.build-version strong { color: #c99a55; font-size: 0.78rem; }
+
 .view-tabs {
   display: flex;
   flex: 0 0 auto;
