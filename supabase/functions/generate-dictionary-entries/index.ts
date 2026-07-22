@@ -121,7 +121,8 @@ async function generateEntries(apiKey: string, model: string, words: WordContext
             fieldsByType: typeFields,
             rules: [
               "meaning: 2 to 4 short English glosses for this specific word in this context, not a sentence translation.",
-              "meaningRu: 2 to 4 short Russian glosses matching the same senses as meaning; empty array only if truly unsure.",
+              "meaningRu: 2 to 4 non-empty short Russian glosses matching the same senses as meaning.",
+              "Every field required for the selected part of speech MUST be filled. Never return an empty string, empty array, dash, question mark, 'unknown', or 'N/A'. Choose the best standard dictionary value when context is limited.",
               "All Arabic values (word, root, plural, imperative, present, wazn, masculine, feminine) must include harakat/diacritics whenever known. Do not return unvocalized forms like فعل when the vocalized فَعَلَ is known.",
               "noun.root: root letters separated by spaces, e.g. ر ج ع. noun.plural: the plural noun form, or the singular form if the word itself is already the plural.",
               "For every verb, imperative, present, and wazn MUST contain real vocalized Arabic and must never be blank, a dash, or 'not applicable'. Derive them from the underlying dictionary verb even when word is a past, present, imperative, plural, feminine, passive, or has an attached particle.",
@@ -171,7 +172,7 @@ function normalizeEntry(value: unknown): DictionaryEntry {
   const meaning = asStringArray(record.meaning);
   const meaningRu = asStringArray(record.meaningRu);
 
-  if (!word || !(partOfSpeech in typeFields) || meaning.length === 0) {
+  if (!word || !(partOfSpeech in typeFields) || meaning.length === 0 || meaningRu.length === 0) {
     throw new Error(`OpenAI returned an incomplete dictionary entry for ${word || "(unknown word)"}.`);
   }
 
@@ -182,8 +183,9 @@ function normalizeEntry(value: unknown): DictionaryEntry {
     (entry as Record<string, unknown>)[field] = fieldValue;
   }
 
-  if (partOfSpeech === "verb" && (!entry.imperative || !entry.present || !entry.wazn)) {
-    throw new Error(`AI returned incomplete verb forms for ${word}. Try regenerating this word.`);
+  const missingFields = typeFields[partOfSpeech].filter((field) => !String((entry as Record<string, unknown>)[field] ?? "").trim());
+  if (missingFields.length > 0) {
+    throw new Error(`AI left required fields blank for ${word}: ${missingFields.join(", ")}. Try regenerating this word.`);
   }
 
   return entry;
@@ -255,9 +257,9 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 // Shared "sense" fields every part-of-speech variant carries.
 const senseProperties = {
-  word: { type: "string", description: "Arabic surface form from input, with harakat when appropriate." },
-  meaning: { type: "array", items: { type: "string" }, description: "2 to 4 short English glosses." },
-  meaningRu: { type: "array", items: { type: "string" }, description: "2 to 4 short Russian glosses." },
+  word: { type: "string", minLength: 1, description: "Arabic surface form from input, with harakat when appropriate." },
+  meaning: { type: "array", minItems: 2, maxItems: 4, items: { type: "string", minLength: 1 }, description: "2 to 4 non-empty short English glosses." },
+  meaningRu: { type: "array", minItems: 2, maxItems: 4, items: { type: "string", minLength: 1 }, description: "2 to 4 non-empty short Russian glosses." },
 };
 
 function posVariant(partOfSpeech: PartOfSpeech, extraProperties: Record<string, unknown> = {}) {
@@ -275,7 +277,7 @@ function posVariant(partOfSpeech: PartOfSpeech, extraProperties: Record<string, 
   };
 }
 
-const arabicField = { type: "string", description: "Arabic with harakat when known, or empty string if not applicable." };
+const arabicField = { type: "string", minLength: 1, description: "Required Arabic with harakat. Never empty and never use a placeholder." };
 const requiredVerbField = {
   type: "string",
   minLength: 1,
@@ -298,9 +300,9 @@ const entriesJsonSchema = {
             posVariant("adverb"),
             posVariant("pronoun"),
             posVariant("particle"),
-            posVariant("preposition", { governs: { type: "string", description: "Short label, e.g. genitive." } }),
+            posVariant("preposition", { governs: { type: "string", minLength: 1, description: "Required short label, e.g. genitive. Never empty." } }),
             posVariant("conjunction"),
-            posVariant("expression", { literalMeaning: { type: "string", description: "Literal word-for-word English rendering." } }),
+            posVariant("expression", { literalMeaning: { type: "string", minLength: 1, description: "Required literal word-for-word English rendering. Never empty." } }),
           ],
         },
       },

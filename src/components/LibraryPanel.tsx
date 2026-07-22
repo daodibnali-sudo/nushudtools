@@ -37,6 +37,7 @@ export function LibraryPanel({ supabase, adminEmail }: LibraryPanelProps) {
   const [syncActive, setSyncActive] = useState(false);
   const [libraryIsPlaying, setLibraryIsPlaying] = useState(false);
   const [playbackRate, setPlaybackRate] = useState(1);
+  const [libraryAudioDurationMs, setLibraryAudioDurationMs] = useState(0);
   const [repairJsonText, setRepairJsonText] = useState("");
   const [loadError, setLoadError] = useState("");
   const [status, setStatus] = useState("Ready.");
@@ -343,6 +344,7 @@ export function LibraryPanel({ supabase, adminEmail }: LibraryPanelProps) {
         tags: selected.tags ?? [],
         cover_url: coverUrl,
         audio_url: audioUrl,
+        ...(libraryAudioDurationMs > 0 ? { duration_ms: libraryAudioDurationMs } : {}),
       }).eq("id", selected.id);
       if (rowError) throw new Error(`Lyrics saved, but metadata could not be saved: ${rowError.message}`);
       setLyrics(normalized);
@@ -388,6 +390,7 @@ export function LibraryPanel({ supabase, adminEmail }: LibraryPanelProps) {
       const { error: rowError } = await supabase.from("nasheeds").update({
         title: selected.title.trim(), artist_name: selected.artist_name.trim(), difficulty: selected.difficulty,
         tags: selected.tags ?? [], lyrics_json_url: lyricsUrl, audio_url: audioUrl, cover_url: coverUrl,
+        ...(libraryAudioDurationMs > 0 ? { duration_ms: libraryAudioDurationMs } : {}),
       }).eq("id", selected.id);
       if (rowError) throw new Error(`Could not update library record: ${rowError.message}`);
       setItems((current) => current.map((item) => item.id === selected.id ? { ...item, lyrics_json_url: lyricsUrl, audio_url: audioUrl, cover_url: coverUrl } : item));
@@ -567,7 +570,11 @@ export function LibraryPanel({ supabase, adminEmail }: LibraryPanelProps) {
                 src={audioPreviewUrl}
                 controls
                 preload="metadata"
-                onLoadedMetadata={(event) => { event.currentTarget.playbackRate = playbackRate; }}
+                onLoadedMetadata={(event) => {
+                  event.currentTarget.playbackRate = playbackRate;
+                  const durationMs = Math.round(event.currentTarget.duration * 1000);
+                  if (Number.isFinite(durationMs) && durationMs > 0) setLibraryAudioDurationMs(durationMs);
+                }}
                 onTimeUpdate={(event) => setPlayheadMs(Math.round(event.currentTarget.currentTime * 1000))}
                 onSeeked={(event) => setPlayheadMs(Math.round(event.currentTarget.currentTime * 1000))}
                 onPlay={() => setLibraryIsPlaying(true)}

@@ -29,6 +29,7 @@ export type NushudContentJson = {
   difficulty: "beginner" | "intermediate" | "advanced";
   tags: string[];
   audioFileName: string;
+  durationMs?: number;
   lineCount: number;
   languages: string[];
   lines: ContentLine[];

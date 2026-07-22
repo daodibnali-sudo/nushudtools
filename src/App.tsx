@@ -60,6 +60,7 @@ function App() {
   const [firstLineStartMs, setFirstLineStartMs] = useState<number | null>(null);
   const [currentTimeMs, setCurrentTimeMs] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [audioDurationMs, setAudioDurationMs] = useState(0);
   const [runtimeWarnings, setRuntimeWarnings] = useState<ValidationMessage[]>([]);
   const [existingJsonFileName, setExistingJsonFileName] = useState("");
   const [existingContentJson, setExistingContentJson] = useState<NushudContentJson | null>(null);
@@ -101,6 +102,7 @@ function App() {
   useEffect(() => {
     if (!audioFile) {
       setAudioUrl("");
+      setAudioDurationMs(0);
       return;
     }
 
@@ -495,6 +497,8 @@ function App() {
         translations,
         timestamps,
         firstLineStartMs ?? 0,
+        audioDurationMs,
+        audioFile?.name ?? "",
       );
     }
     if (!audioFile || arabicLines.length === 0) return null;
@@ -506,8 +510,9 @@ function App() {
       translations,
       timestamps,
       firstLineStartMs: firstLineStartMs ?? 0,
+      durationMs: audioDurationMs,
     });
-  }, [arabicLines, audioFile, existingContentJson, firstLineStartMs, metadata, timestamps, translations]);
+  }, [arabicLines, audioDurationMs, audioFile, existingContentJson, firstLineStartMs, metadata, timestamps, translations]);
 
   const contentJsonSource = existingContentJson ? "imported" : "generated";
 
@@ -653,6 +658,7 @@ function App() {
               onMarkFirstLineStart={markFirstLineStart}
               onUndo={undoTimestamp}
               onRestart={restartSync}
+              onDurationChange={setAudioDurationMs}
             />
             <SyncPreview
               arabicLines={arabicLines}
@@ -768,6 +774,8 @@ function completeExistingContentJson(
   translations: UploadedTextFile[],
   timestamps: Array<number | null>,
   firstLineStartMs: number,
+  audioDurationMs: number,
+  selectedAudioFileName: string,
 ): NushudContentJson {
   const record = json as unknown as Record<string, unknown>;
   const activeTranslations = translations.filter((translation) => translation.languageCode.trim());
@@ -794,7 +802,8 @@ function completeExistingContentJson(
     artist: metadata.artist.trim(),
     difficulty: metadata.difficulty,
     tags: metadata.tags.split(",").map((tag) => tag.trim()).filter(Boolean),
-    audioFileName: typeof record.audioFileName === "string" ? record.audioFileName : "",
+    audioFileName: selectedAudioFileName || (typeof record.audioFileName === "string" ? record.audioFileName : ""),
+    durationMs: audioDurationMs > 0 ? audioDurationMs : Number(record.durationMs) || undefined,
     lineCount: lines.length,
     languages,
     lines,

@@ -17,6 +17,7 @@ type AudioControlsProps = {
   onMarkFirstLineStart: () => void;
   onUndo: () => void;
   onRestart: () => void;
+  onDurationChange: (durationMs: number) => void;
 };
 
 export function AudioControls({
@@ -35,6 +36,7 @@ export function AudioControls({
   onMarkFirstLineStart,
   onUndo,
   onRestart,
+  onDurationChange,
 }: AudioControlsProps) {
   const [playbackRate, setPlaybackRate] = useState(1);
 
@@ -54,7 +56,11 @@ export function AudioControls({
           ref={audioRef}
           src={audioUrl}
           preload="metadata"
-          onLoadedMetadata={(event) => { event.currentTarget.playbackRate = playbackRate; }}
+          onLoadedMetadata={(event) => {
+            event.currentTarget.playbackRate = playbackRate;
+            const durationMs = Math.round(event.currentTarget.duration * 1000);
+            if (Number.isFinite(durationMs) && durationMs > 0) onDurationChange(durationMs);
+          }}
         />
       )}
       <div className="time-display">{formatTime(currentTimeMs)}</div>
