@@ -656,6 +656,7 @@ function App() {
               onTogglePlay={togglePlay}
               onSeek={seekAudio}
               onMarkFirstLineStart={markFirstLineStart}
+              onMarkLineEnd={markLineEnd}
               onUndo={undoTimestamp}
               onRestart={restartSync}
               onDurationChange={setAudioDurationMs}

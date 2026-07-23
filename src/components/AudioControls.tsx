@@ -15,6 +15,7 @@ type AudioControlsProps = {
   onTogglePlay: () => void;
   onSeek: (deltaMs: number) => void;
   onMarkFirstLineStart: () => void;
+  onMarkLineEnd: () => void;
   onUndo: () => void;
   onRestart: () => void;
   onDurationChange: (durationMs: number) => void;
@@ -34,6 +35,7 @@ export function AudioControls({
   onTogglePlay,
   onSeek,
   onMarkFirstLineStart,
+  onMarkLineEnd,
   onUndo,
   onRestart,
   onDurationChange,
@@ -107,6 +109,14 @@ export function AudioControls({
         </button>
         <button type="button" onClick={onMarkFirstLineStart} disabled={!syncStarted}>
           Mark First Line Start
+        </button>
+        <button
+          type="button"
+          className="primary-button"
+          onClick={onMarkLineEnd}
+          disabled={!syncStarted || currentLine >= totalLines}
+        >
+          Stamp Line End
         </button>
       </div>
       <div className={firstLineStartMs === null ? "status-text warning-text" : "status-text success-text"}>
