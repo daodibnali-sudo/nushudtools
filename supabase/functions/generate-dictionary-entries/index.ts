@@ -98,7 +98,95 @@ Deno.serve(async (request) => {
   }
 });
 
+// All morphology fields across every part of speech. The OpenAI Structured Outputs "strict"
+// mode requires every property to be listed in `required`, so optionality is expressed by
+// making each of these nullable (`["string", "null"]`) instead of omitting it — the model
+// must then explicitly write `null` for fields that don't apply, rather than being able to
+// just leave a field out (which is what let it silently skip required fields before).
+const allMorphologyFields = Array.from(new Set(Object.values(typeFields).flat()));
+
+const dictionaryEntrySchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["word", "partOfSpeech", "meaning", "meaningRu", ...allMorphologyFields],
+  properties: {
+    word: { type: "string" },
+    partOfSpeech: { type: "string", enum: Object.keys(typeFields) },
+    meaning: { type: "array", items: { type: "string" } },
+    meaningRu: { type: "array", items: { type: "string" } },
+    ...Object.fromEntries(allMorphologyFields.map((field) => [field, { type: ["string", "null"] }])),
+  },
+};
+
+const dictionaryResponseSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["entries"],
+  properties: {
+    entries: { type: "array", items: dictionaryEntrySchema },
+  },
+};
+
+const MAX_RETRIES_PER_WORD = 2;
+
 async function generateEntries(apiKey: string, model: string, words: WordContext[]): Promise<DictionaryEntry[]> {
+  const initial = await callOpenAiForWords(apiKey, model, words);
+  const incompleteIndexes = initial
+    .map((entry, index) => (isEntryComplete(entry) ? -1 : index))
+    .filter((index) => index >= 0);
+
+  if (incompleteIndexes.length === 0) {
+    return initial;
+  }
+
+  // Structured Outputs guarantees the model returns every field with the right type, but it
+  // can't force the *content* to be non-empty — a lazy model can still write "" or null for a
+  // required field. Retry those specific words on their own (smaller prompt, less to juggle)
+  // instead of silently accepting a blank, which is what caused regenerate-all to look
+  // successful while leaving most morphology fields empty.
+  const results = [...initial];
+
+  for (const index of incompleteIndexes) {
+    const context = words[index];
+    let attempt = 0;
+    let bestEntry = initial[index];
+
+    while (attempt < MAX_RETRIES_PER_WORD && !isEntryComplete(bestEntry)) {
+      attempt += 1;
+
+      try {
+        const [retried] = await callOpenAiForWords(apiKey, model, [context]);
+        if (retried) {
+          bestEntry = retried;
+        }
+      } catch {
+        // Keep the previous best attempt; a network/API hiccup on retry shouldn't lose progress
+        // already made on this word.
+      }
+    }
+
+    results[index] = bestEntry;
+  }
+
+  return results;
+}
+
+function isFilledValue(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  const trimmed = value.trim().toLowerCase();
+  return trimmed.length > 0 && !["-", "—", "n/a", "unknown", "?"].includes(trimmed);
+}
+
+function isEntryComplete(entry: DictionaryEntry): boolean {
+  const requiredFields = typeFields[entry.partOfSpeech] ?? [];
+  return (
+    entry.meaning.length > 0
+    && entry.meaningRu.length > 0
+    && requiredFields.every((field) => isFilledValue((entry as Record<string, unknown>)[field]))
+  );
+}
+
+async function callOpenAiForWords(apiKey: string, model: string, words: WordContext[]): Promise<DictionaryEntry[]> {
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -107,12 +195,15 @@ async function generateEntries(apiKey: string, model: string, words: WordContext
     },
     body: JSON.stringify({
       model,
-      response_format: { type: "json_object" },
+      response_format: {
+        type: "json_schema",
+        json_schema: { name: "dictionary_entries", strict: true, schema: dictionaryResponseSchema },
+      },
       messages: [
         {
           role: "system",
           content:
-            "You are an Arabic morphology assistant for a Classical Arabic learning app. First decide the single grammatical type of each word. A conjugated finite verb, imperative, participial verb used verbally, or verb with attached particles must still be classified as verb and analyzed from its underlying lemma. Return only the fields that type needs — the response schema forbids any other field. Use the provided Arabic/English line context to identify the intended sense, not a literal translation of the whole line.",
+            "You are an Arabic morphology assistant for a Classical Arabic learning app. First decide the single grammatical type of each word. A conjugated finite verb, imperative, participial verb used verbally, or verb with attached particles must still be classified as verb and analyzed from its underlying lemma. Use the provided Arabic/English line context to identify the intended sense, not a literal translation of the whole line.",
         },
         {
           role: "user",
@@ -120,11 +211,11 @@ async function generateEntries(apiKey: string, model: string, words: WordContext
             words,
             fieldsByType: typeFields,
             responseShape:
-              "Return a JSON object with an entries array. Each entry must include word, partOfSpeech, meaning, meaningRu, and only the extra fields required by fieldsByType for that partOfSpeech.",
+              "Return a JSON object with an entries array, one entry per input word in the same order. Every entry must include every field in the schema. Set a field to null when it does not apply to that word's partOfSpeech (per fieldsByType); never null for a field that fieldsByType requires for the chosen partOfSpeech.",
             rules: [
               "meaning: 2 to 4 short English glosses for this specific word in this context, not a sentence translation.",
               "meaningRu: 2 to 4 non-empty short Russian glosses matching the same senses as meaning.",
-              "Every field required for the selected part of speech MUST be filled. Never return an empty string, empty array, dash, question mark, 'unknown', or 'N/A'. Choose the best standard dictionary value when context is limited.",
+              "Every field required for the selected part of speech MUST be filled with a real value. Never use an empty string, dash, question mark, 'unknown', or 'N/A' for a required field — use null only for fields that don't apply to this partOfSpeech at all. Choose the best standard dictionary value when context is limited.",
               "All Arabic values (word, root, plural, imperative, present, wazn, masculine, feminine) must include harakat/diacritics whenever known. Do not return unvocalized forms like فعل when the vocalized فَعَلَ is known.",
               "noun.root: root letters separated by spaces, e.g. ر ج ع. noun.plural: the plural noun form, or the singular form if the word itself is already the plural.",
               "For every verb, imperative, present, and wazn MUST contain real vocalized Arabic and must never be blank, a dash, or 'not applicable'. Derive them from the underlying dictionary verb even when word is a past, present, imperative, plural, feminine, passive, or has an attached particle.",
