@@ -1,4 +1,4 @@
-import type { RefObject } from "react";
+import { useState, type RefObject } from "react";
 import { formatTime } from "../utils/formatTime";
 
 type AudioControlsProps = {
@@ -15,8 +15,10 @@ type AudioControlsProps = {
   onTogglePlay: () => void;
   onSeek: (deltaMs: number) => void;
   onMarkFirstLineStart: () => void;
+  onMarkLineEnd: () => void;
   onUndo: () => void;
   onRestart: () => void;
+  onDurationChange: (durationMs: number) => void;
 };
 
 export function AudioControls({
@@ -33,17 +35,53 @@ export function AudioControls({
   onTogglePlay,
   onSeek,
   onMarkFirstLineStart,
+  onMarkLineEnd,
   onUndo,
   onRestart,
+  onDurationChange,
 }: AudioControlsProps) {
+  const [playbackRate, setPlaybackRate] = useState(1);
+
+  const changePlaybackRate = (rate: number) => {
+    setPlaybackRate(rate);
+    if (audioRef.current) audioRef.current.playbackRate = rate;
+  };
+
   return (
     <section className="panel controls-panel">
       <div className="panel-heading">
         <h2>Audio Controls</h2>
         <p>{totalLines > 0 ? `Line ${Math.min(currentLine + 1, totalLines)} / ${totalLines}` : "No lines loaded"}</p>
       </div>
-      {audioUrl && <audio ref={audioRef} src={audioUrl} preload="metadata" />}
+      {audioUrl && (
+        <audio
+          ref={audioRef}
+          src={audioUrl}
+          preload="metadata"
+          onLoadedMetadata={(event) => {
+            event.currentTarget.playbackRate = playbackRate;
+            const durationMs = Math.round(event.currentTarget.duration * 1000);
+            if (Number.isFinite(durationMs) && durationMs > 0) onDurationChange(durationMs);
+          }}
+        />
+      )}
       <div className="time-display">{formatTime(currentTimeMs)}</div>
+      <div className="publish-speed-row">
+        <span>Playback speed</span>
+        <div className="playback-rate-controls" aria-label="Playback speed">
+          {[1, 1.5, 2, 2.5, 3, 4].map((rate) => (
+            <button
+              type="button"
+              key={rate}
+              className={playbackRate === rate ? "active" : ""}
+              disabled={!audioUrl}
+              onClick={() => changePlaybackRate(rate)}
+            >
+              {rate}×
+            </button>
+          ))}
+        </div>
+      </div>
       <div className="button-row">
         <button type="button" className="primary-button" disabled={!canStart} onClick={onStartSync}>
           Start Sync
@@ -71,6 +109,14 @@ export function AudioControls({
         </button>
         <button type="button" onClick={onMarkFirstLineStart} disabled={!syncStarted}>
           Mark First Line Start
+        </button>
+        <button
+          type="button"
+          className="primary-button"
+          onClick={onMarkLineEnd}
+          disabled={!syncStarted || currentLine >= totalLines}
+        >
+          Stamp Line End
         </button>
       </div>
       <div className={firstLineStartMs === null ? "status-text warning-text" : "status-text success-text"}>

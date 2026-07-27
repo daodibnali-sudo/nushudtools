@@ -2,15 +2,31 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
 
+type PartOfSpeech =
+  | "noun"
+  | "verb"
+  | "adjective"
+  | "adverb"
+  | "pronoun"
+  | "particle"
+  | "preposition"
+  | "conjunction"
+  | "expression";
+
 type DictionaryEntry = {
   word: string;
-  baseWord: string;
+  partOfSpeech: PartOfSpeech;
   meaning: string[];
-  root: string;
-  wazn: string;
-  forms: string;
-  bab: string;
-  partOfSpeech: string;
+  meaningRu: string[];
+  root?: string;
+  plural?: string;
+  imperative?: string;
+  present?: string;
+  wazn?: string;
+  masculine?: string;
+  feminine?: string;
+  governs?: string;
+  literalMeaning?: string;
 };
 
 type WordContext = {
@@ -26,6 +42,19 @@ const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
+};
+
+// Fields required for every part of speech, beyond the shared word/partOfSpeech/meaning/meaningRu.
+const typeFields: Record<PartOfSpeech, string[]> = {
+  noun: ["root", "plural"],
+  verb: ["imperative", "present", "wazn"],
+  adjective: ["masculine", "feminine", "plural"],
+  adverb: [],
+  pronoun: [],
+  particle: [],
+  preposition: ["governs"],
+  conjunction: [],
+  expression: ["literalMeaning"],
 };
 
 Deno.serve(async (request) => {
@@ -78,49 +107,31 @@ async function generateEntries(apiKey: string, model: string, words: WordContext
     },
     body: JSON.stringify({
       model,
-      response_format: { type: "json_object" },
+      response_format: { type: "json_schema", json_schema: entriesJsonSchema },
       messages: [
         {
           role: "system",
           content:
-            "You are an Arabic morphology assistant for a Classical Arabic learning app. Return only valid JSON with an entries array. Use the provided Arabic/English line context to identify the intended sense. Be precise and do not confuse morphology fields.",
+            "You are an Arabic morphology assistant for a Classical Arabic learning app. First decide the single grammatical type of each word. A conjugated finite verb, imperative, participial verb used verbally, or verb with attached particles must still be classified as verb and analyzed from its underlying lemma. Return only the fields that type needs — the response schema forbids any other field. Use the provided Arabic/English line context to identify the intended sense, not a literal translation of the whole line.",
         },
         {
           role: "user",
           content: JSON.stringify({
             words,
-            entryShape: {
-              word: "same Arabic word from input, with harakat when appropriate",
-              baseWord: "base Arabic lemma without attached particles/pronouns, with harakat when appropriate",
-              meaning: ["2 to 4 short English meanings or glosses"],
-              root: "Arabic root letters separated by spaces, preferably with harakat when useful, or empty string",
-              wazn:
-                "Arabic pattern pair for verbs such as \u0641\u064E\u0639\u064E\u0644\u064E\u060C \u064A\u064E\u0641\u0652\u0639\u064F\u0644\u064F or \u0641\u064E\u0639\u0651\u064E\u0644\u064E\u060C \u064A\u064F\u0641\u064E\u0639\u0651\u0650\u0644\u064F; Arabic noun pattern such as \u0641\u064E\u0627\u0639\u0650\u0644 or \u0645\u064E\u0641\u0652\u0639\u064F\u0648\u0644; empty string if not applicable",
-              forms:
-                "actual Arabic word forms for learners, such as \u0637\u064E\u0627\u0644\u064E\u060C \u064A\u064E\u0637\u064F\u0648\u0644\u064F for a verb; singular/plural or common form for nouns; empty string if not applicable",
-              bab: "Arabic form/category label such as \u0627\u0644\u0628\u0627\u0628 \u0627\u0644\u0623\u0648\u0644: \u0641\u064E\u0639\u064E\u0644\u064E, \u0627\u0644\u0628\u0627\u0628 \u0627\u0644\u062B\u0627\u0646\u064A: \u0641\u064E\u0639\u0651\u064E\u0644\u064E, \u0627\u0644\u0628\u0627\u0628 \u0627\u0644\u062B\u0627\u0644\u062B: \u0641\u064E\u0627\u0639\u064E\u0644\u064E, or empty string if not applicable",
-              partOfSpeech: "one grammar type only: verb, noun, adjective, particle, pronoun, preposition, adverb, conjunction, or phrase",
-            },
+            fieldsByType: typeFields,
             rules: [
-              "Use the Arabic and English line context to determine the intended sense.",
-              "Do not translate the whole line as the word meaning.",
-              "All Arabic in word, wazn, forms, and bab must include harakat/diacritics whenever applicable.",
-              "Root letters may be separated by spaces and should use harakat only if that helps learning; do not add fake case endings to isolated root letters.",
-              "Do not return unvocalized Arabic patterns like فعل or يطول when vocalized forms like فَعَلَ or يَطُولُ are known.",
-              "meaning must contain 2, 3, or 4 useful short meanings. Do not return only one meaning unless the word is a particle with no other natural gloss.",
-              "For verbs, wazn must be Arabic and include both perfect and imperfect patterns when known, for example \u0641\u064E\u0639\u064E\u0644\u064E\u060C \u064A\u064E\u0641\u0652\u0639\u064F\u0644\u064F; \u0641\u064E\u0639\u0650\u0644\u064E\u060C \u064A\u064E\u0641\u0652\u0639\u064E\u0644\u064F; \u0641\u064E\u0639\u0651\u064E\u0644\u064E\u060C \u064A\u064F\u0641\u064E\u0639\u0651\u0650\u0644\u064F; \u0641\u064E\u0627\u0639\u064E\u0644\u064E\u060C \u064A\u064F\u0641\u064E\u0627\u0639\u0650\u0644\u064F; \u0623\u064E\u0641\u0652\u0639\u064E\u0644\u064E\u060C \u064A\u064F\u0641\u0652\u0639\u0650\u0644\u064F.",
-              "For verbs, forms must show the actual word using the same perfect/imperfect pattern, for example for \u0637\u0627\u0644 return \u0637\u064E\u0627\u0644\u064E\u060C \u064A\u064E\u0637\u064F\u0648\u0644\u064F while wazn is \u0641\u064E\u0639\u064E\u0644\u064E\u060C \u064A\u064E\u0641\u0652\u0639\u064F\u0644\u064F.",
-              "For nouns, forms must show noun forms only, such as singular/plural or possessed/base forms. Example: \u0644\u064E\u064A\u0652\u0644\u064C\u060C \u0644\u064E\u064A\u064E\u0627\u0644\u064D. Do not give verb forms for nouns.",
-              "For verbs, bab must be Arabic and include the form/category and Arabic pattern, for example \u0627\u0644\u0628\u0627\u0628 \u0627\u0644\u0623\u0648\u0644: \u0641\u064E\u0639\u064E\u0644\u064E, \u0627\u0644\u0628\u0627\u0628 \u0627\u0644\u062B\u0627\u0646\u064A: \u0641\u064E\u0639\u0651\u064E\u0644\u064E, \u0627\u0644\u0628\u0627\u0628 \u0627\u0644\u062B\u0627\u0644\u062B: \u0641\u064E\u0627\u0639\u064E\u0644\u064E.",
-              "bab must be Arabic if not empty. Never return English labels like Form I, noun, verb, active participle, or passive participle in bab.",
-              "Do not put only Form I, Form II, etc. in wazn.",
-              "Do not put verb, noun, particle, etc. in bab. Put it in partOfSpeech.",
-              "For nouns, wazn should be an Arabic noun pattern when known, for example \u0641\u064E\u0627\u0639\u0650\u0644, \u0645\u064E\u0641\u0652\u0639\u064F\u0648\u0644, \u0641\u064E\u0639\u0650\u064A\u0644, or empty string.",
-              "For nouns, bab should be an Arabic category such as \u0627\u0633\u0645 \u0641\u0627\u0639\u0644, \u0627\u0633\u0645 \u0645\u0641\u0639\u0648\u0644, \u0645\u0635\u062F\u0631, \u0627\u0633\u0645 \u0645\u0643\u0627\u0646, or empty string.",
-              "For particles, prepositions, pronouns, and conjunctions, root, wazn, and bab should usually be empty strings.",
-              "If a word has attached \u0648, \u0641, \u0628, \u0644, \u0643, or \u0627\u0644, analyze the meaningful base word, but keep the original input in word.",
-              "Use baseWord for the stripped lexical word. Example: word \u0648\u064E\u0627\u0644\u0644\u064E\u064A\u064E\u0627\u0644\u0650\u064A, baseWord \u0644\u064E\u064A\u0652\u0644.",
-              "Use concise English meanings, not full sentence translations.",
+              "meaning: 2 to 4 short English glosses for this specific word in this context, not a sentence translation.",
+              "meaningRu: 2 to 4 non-empty short Russian glosses matching the same senses as meaning.",
+              "Every field required for the selected part of speech MUST be filled. Never return an empty string, empty array, dash, question mark, 'unknown', or 'N/A'. Choose the best standard dictionary value when context is limited.",
+              "All Arabic values (word, root, plural, imperative, present, wazn, masculine, feminine) must include harakat/diacritics whenever known. Do not return unvocalized forms like فعل when the vocalized فَعَلَ is known.",
+              "noun.root: root letters separated by spaces, e.g. ر ج ع. noun.plural: the plural noun form, or the singular form if the word itself is already the plural.",
+              "For every verb, imperative, present, and wazn MUST contain real vocalized Arabic and must never be blank, a dash, or 'not applicable'. Derive them from the underlying dictionary verb even when word is a past, present, imperative, plural, feminine, passive, or has an attached particle.",
+              "verb.imperative: second-person masculine singular command, e.g. اُكْتُبْ. verb.present: third-person masculine singular present/imperfect, e.g. يَكْتُبُ. verb.wazn: the vocalized morphological pattern/form, e.g. فَعَلَ or أَفْعَلَ.",
+              "adjective.masculine and adjective.feminine: the two gender forms. adjective.plural: the plural form.",
+              "preposition.governs: a short label for what case/object it governs, e.g. \"genitive\" or \"object pronoun\".",
+              "expression.literalMeaning: a short literal, word-for-word English rendering of the phrase, distinct from its idiomatic meaning.",
+              "If a word has an attached و, ف, ب, ل, ك, or ال, analyze the meaningful base word but keep the original surface form in word.",
+              "expression is only for multi-word fixed phrases, not single words with an idiomatic sense.",
             ],
           }),
         },
@@ -157,34 +168,32 @@ function normalizeEntry(value: unknown): DictionaryEntry {
 
   const record = value as Record<string, unknown>;
   const word = String(record.word ?? "").trim();
-  const meaning = Array.isArray(record.meaning)
-    ? record.meaning.map((item) => String(item).trim()).filter(Boolean)
-    : typeof record.meaning === "string"
-      ? [record.meaning.trim()].filter(Boolean)
-      : [];
+  const partOfSpeech = String(record.partOfSpeech ?? "") as PartOfSpeech;
+  const meaning = asStringArray(record.meaning);
+  const meaningRu = asStringArray(record.meaningRu);
 
-  if (!word || meaning.length === 0) {
-    throw new Error("OpenAI returned an incomplete dictionary entry.");
+  if (!word || !(partOfSpeech in typeFields) || meaning.length === 0 || meaningRu.length === 0) {
+    throw new Error(`OpenAI returned an incomplete dictionary entry for ${word || "(unknown word)"}.`);
   }
 
-  const wazn = typeof record.wazn === "string" ? record.wazn : "";
-  const forms = typeof record.forms === "string" ? record.forms : "";
-  const bab = typeof record.bab === "string" ? record.bab : "";
+  const entry: DictionaryEntry = { word, partOfSpeech, meaning: meaning.slice(0, 4), meaningRu: meaningRu.slice(0, 4) };
 
-  if (bab && /form|verb|noun|active|passive/i.test(bab)) {
-    throw new Error(`OpenAI returned English text in bab for ${word}.`);
+  for (const field of typeFields[partOfSpeech]) {
+    const fieldValue = typeof record[field] === "string" ? (record[field] as string).trim() : "";
+    (entry as Record<string, unknown>)[field] = fieldValue;
   }
 
-  return {
-    word,
-    baseWord: typeof record.baseWord === "string" ? record.baseWord : "",
-    meaning: meaning.slice(0, 4),
-    root: typeof record.root === "string" ? record.root : "",
-    wazn,
-    forms,
-    bab,
-    partOfSpeech: typeof record.partOfSpeech === "string" ? record.partOfSpeech : "",
-  };
+  const missingFields = typeFields[partOfSpeech].filter((field) => !String((entry as Record<string, unknown>)[field] ?? "").trim());
+  if (missingFields.length > 0) {
+    throw new Error(`AI left required fields blank for ${word}: ${missingFields.join(", ")}. Try regenerating this word.`);
+  }
+
+  return entry;
+}
+
+function asStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => String(item).trim()).filter(Boolean);
 }
 
 function parseWords(value: unknown): WordContext[] {
@@ -245,3 +254,60 @@ function jsonResponse(body: unknown, status = 200): Response {
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
 }
+
+// Shared "sense" fields every part-of-speech variant carries.
+const senseProperties = {
+  word: { type: "string", minLength: 1, description: "Arabic surface form from input, with harakat when appropriate." },
+  meaning: { type: "array", minItems: 2, maxItems: 4, items: { type: "string", minLength: 1 }, description: "2 to 4 non-empty short English glosses." },
+  meaningRu: { type: "array", minItems: 2, maxItems: 4, items: { type: "string", minLength: 1 }, description: "2 to 4 non-empty short Russian glosses." },
+};
+
+function posVariant(partOfSpeech: PartOfSpeech, extraProperties: Record<string, unknown> = {}) {
+  const properties = {
+    ...senseProperties,
+    partOfSpeech: { type: "string", enum: [partOfSpeech] },
+    ...extraProperties,
+  };
+
+  return {
+    type: "object",
+    properties,
+    required: Object.keys(properties),
+    additionalProperties: false,
+  };
+}
+
+const arabicField = { type: "string", minLength: 1, description: "Required Arabic with harakat. Never empty and never use a placeholder." };
+const requiredVerbField = {
+  type: "string",
+  minLength: 1,
+  description: "Required vocalized Arabic form. Never empty and never use a dash or an N/A marker.",
+};
+
+const entriesJsonSchema = {
+  name: "dictionary_entries",
+  strict: true,
+  schema: {
+    type: "object",
+    properties: {
+      entries: {
+        type: "array",
+        items: {
+          anyOf: [
+            posVariant("noun", { root: arabicField, plural: arabicField }),
+            posVariant("verb", { imperative: requiredVerbField, present: requiredVerbField, wazn: requiredVerbField }),
+            posVariant("adjective", { masculine: arabicField, feminine: arabicField, plural: arabicField }),
+            posVariant("adverb"),
+            posVariant("pronoun"),
+            posVariant("particle"),
+            posVariant("preposition", { governs: { type: "string", minLength: 1, description: "Required short label, e.g. genitive. Never empty." } }),
+            posVariant("conjunction"),
+            posVariant("expression", { literalMeaning: { type: "string", minLength: 1, description: "Required literal word-for-word English rendering. Never empty." } }),
+          ],
+        },
+      },
+    },
+    required: ["entries"],
+    additionalProperties: false,
+  },
+};

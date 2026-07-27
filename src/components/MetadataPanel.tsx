@@ -10,7 +10,7 @@ export function MetadataPanel({ metadata, onChange }: MetadataPanelProps) {
     <section className="panel">
       <div className="panel-heading">
         <h2>Metadata</h2>
-        <p>Exported into JSON</p>
+        <p>Fill in or update imported JSON details</p>
       </div>
       <div className="field-grid">
         <label>

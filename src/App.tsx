@@ -7,6 +7,7 @@ import { ExistingJsonPanel } from "./components/ExistingJsonPanel";
 import { ExportPanel } from "./components/ExportPanel";
 import { Header } from "./components/Header";
 import { MetadataPanel } from "./components/MetadataPanel";
+import { LibraryPanel } from "./components/LibraryPanel";
 import { SetupPanel } from "./components/SetupPanel";
 import { ShortcutHelp } from "./components/ShortcutHelp";
 import { SyncPreview } from "./components/SyncPreview";
@@ -36,7 +37,7 @@ function isTypingTarget(target: EventTarget | null): boolean {
 
 function App() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const [workflowStep, setWorkflowStep] = useState<"checking" | "setup" | "sync" | "publish" | "dictionary">("checking");
+  const [workflowStep, setWorkflowStep] = useState<"checking" | "setup" | "sync" | "publish" | "dictionary" | "library">("checking");
   const [supabase, setSupabase] = useState<SupabaseClient | null>(null);
   const [adminEmail, setAdminEmail] = useState("");
   const [metadata, setMetadata] = useState<Metadata>({
@@ -59,6 +60,7 @@ function App() {
   const [firstLineStartMs, setFirstLineStartMs] = useState<number | null>(null);
   const [currentTimeMs, setCurrentTimeMs] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [audioDurationMs, setAudioDurationMs] = useState(0);
   const [runtimeWarnings, setRuntimeWarnings] = useState<ValidationMessage[]>([]);
   const [existingJsonFileName, setExistingJsonFileName] = useState("");
   const [existingContentJson, setExistingContentJson] = useState<NushudContentJson | null>(null);
@@ -100,6 +102,7 @@ function App() {
   useEffect(() => {
     if (!audioFile) {
       setAudioUrl("");
+      setAudioDurationMs(0);
       return;
     }
 
@@ -215,9 +218,40 @@ function App() {
     }
 
     try {
-      const json = JSON.parse(await file.text()) as NushudContentJson;
-      validateExistingContentJson(json);
+      const importedJson = JSON.parse(await file.text()) as NushudContentJson;
+      validateExistingContentJson(importedJson);
+      const json = normalizeExistingContentJson(importedJson);
+      const importedLanguages = Array.from(new Set([
+        ...(json.languages ?? []),
+        ...inferLanguages(json.lines),
+      ])).filter((code) => code !== "ar");
+      const importedArabicLines = json.lines.map((line) => line.ar);
+      const importedTimestamps = json.lines.map((line) => line.endMs);
+
       setExistingContentJson(json);
+      setMetadata((current) => metadataFromExistingJson(json, current));
+      setArabicFileName(file.name);
+      setArabicLines(importedArabicLines);
+      setArabicSourceText(importedArabicLines.join("\n"));
+      setTranslations(
+        importedLanguages.map((languageCode) => {
+          const lines = json.lines.map((line) => String(line[languageCode] ?? ""));
+          return {
+            id: `imported-${languageCode}`,
+            fileName: `JSON · ${languageCode.toUpperCase()}`,
+            languageCode,
+            sourceText: lines.join("\n"),
+            lines,
+          };
+        }),
+      );
+      setTimestamps(importedTimestamps);
+      setFirstLineStartMs(json.lines[0]?.startMs ?? null);
+      setCurrentLine(importedTimestamps.findIndex((timestamp) => timestamp === null) < 0
+        ? importedTimestamps.length
+        : importedTimestamps.findIndex((timestamp) => timestamp === null));
+      setSyncStarted(false);
+      setRuntimeWarnings([]);
     } catch (error) {
       setExistingContentJson(null);
       setExistingJsonError(error instanceof Error ? error.message : "Existing JSON is not valid.");
@@ -455,7 +489,18 @@ function App() {
   }, [arabicLines.length, firstLineStartMs, timestamps, translations, validationMessages]);
 
   const contentJson = useMemo(() => {
-    if (existingContentJson) return existingContentJson;
+    if (existingContentJson) {
+      return completeExistingContentJson(
+        existingContentJson,
+        metadata,
+        arabicLines,
+        translations,
+        timestamps,
+        firstLineStartMs ?? 0,
+        audioDurationMs,
+        audioFile?.name ?? "",
+      );
+    }
     if (!audioFile || arabicLines.length === 0) return null;
 
     return buildContentJson({
@@ -465,8 +510,9 @@ function App() {
       translations,
       timestamps,
       firstLineStartMs: firstLineStartMs ?? 0,
+      durationMs: audioDurationMs,
     });
-  }, [arabicLines, audioFile, existingContentJson, firstLineStartMs, metadata, timestamps, translations]);
+  }, [arabicLines, audioDurationMs, audioFile, existingContentJson, firstLineStartMs, metadata, timestamps, translations]);
 
   const contentJsonSource = existingContentJson ? "imported" : "generated";
 
@@ -475,6 +521,17 @@ function App() {
 
     if (!contentJson) {
       setContinueMessage("Create or import a timed lyrics JSON first.");
+      return;
+    }
+
+    const missingMetadata = [
+      !contentJson.id.trim() && "ID / slug",
+      !contentJson.title.trim() && "title",
+      !contentJson.artist.trim() && "artist",
+    ].filter(Boolean);
+
+    if (missingMetadata.length > 0) {
+      setContinueMessage(`Fill in ${missingMetadata.join(", ")} in Metadata before continuing.`);
       return;
     }
 
@@ -488,6 +545,22 @@ function App() {
       return;
     }
 
+    const incompleteLine = contentJson.lines.findIndex((line) => line.endMs === null || !Number.isFinite(line.endMs));
+    if (incompleteLine >= 0) {
+      setContinueMessage(
+        `Finish timestamping line ${incompleteLine + 1} before continuing. Every line needs an end time for publishing.`,
+      );
+      return;
+    }
+
+    const invalidLine = contentJson.lines.findIndex(
+      (line) => !Number.isFinite(line.startMs) || Number(line.endMs) < line.startMs,
+    );
+    if (invalidLine >= 0) {
+      setContinueMessage(`Line ${invalidLine + 1} has invalid timing. Its end time must be after its start time.`);
+      return;
+    }
+
     setWorkflowStep("publish");
   }, [audioFile, contentJson]);
 
@@ -495,7 +568,7 @@ function App() {
     <main className="app-shell">
       <Header
         currentView={
-          workflowStep === "sync" || workflowStep === "publish" || workflowStep === "dictionary"
+          workflowStep === "sync" || workflowStep === "publish" || workflowStep === "dictionary" || workflowStep === "library"
             ? workflowStep
             : undefined
         }
@@ -551,6 +624,7 @@ function App() {
               arabicText={arabicSourceText}
               translations={translations}
               keepEmptyLines={keepEmptyLines}
+              hasImportedJson={existingContentJson !== null}
               onAudioUpload={setAudioFile}
               onArabicUpload={loadArabicFile}
               onArabicTextChange={loadArabicText}
@@ -582,8 +656,10 @@ function App() {
               onTogglePlay={togglePlay}
               onSeek={seekAudio}
               onMarkFirstLineStart={markFirstLineStart}
+              onMarkLineEnd={markLineEnd}
               onUndo={undoTimestamp}
               onRestart={restartSync}
+              onDurationChange={setAudioDurationMs}
             />
             <SyncPreview
               arabicLines={arabicLines}
@@ -614,6 +690,7 @@ function App() {
         />
       )}
       {workflowStep === "dictionary" && supabase && <DictionaryPanel supabase={supabase} adminEmail={adminEmail} />}
+      {workflowStep === "library" && supabase && <LibraryPanel supabase={supabase} adminEmail={adminEmail} />}
     </main>
   );
 }
@@ -634,10 +711,6 @@ function validateExistingContentJson(json: NushudContentJson) {
     throw new Error("JSON file must contain an object.");
   }
 
-  if (!json.id || !json.title || !json.artist) {
-    throw new Error("JSON needs id, title, and artist.");
-  }
-
   if (!Array.isArray(json.lines) || json.lines.length === 0) {
     throw new Error("JSON needs a non-empty lines array.");
   }
@@ -647,10 +720,100 @@ function validateExistingContentJson(json: NushudContentJson) {
       throw new Error(`Line ${index + 1} needs ar.`);
     }
 
-    if (!Number.isFinite(line.startMs) || line.endMs !== null && !Number.isFinite(line.endMs)) {
+    if (
+      line.startMs !== undefined && line.startMs !== null && !Number.isFinite(Number(line.startMs)) ||
+      line.endMs !== undefined && line.endMs !== null && !Number.isFinite(Number(line.endMs))
+    ) {
       throw new Error(`Line ${index + 1} has invalid timing.`);
     }
   });
+}
+
+function normalizeExistingContentJson(json: NushudContentJson): NushudContentJson {
+  const lines = json.lines.map((line, index) => ({
+    ...line,
+    lineIndex: Number.isFinite(Number(line.lineIndex)) ? Number(line.lineIndex) : index,
+    startMs: Number.isFinite(Number(line.startMs)) ? Number(line.startMs) : 0,
+    endMs: line.endMs !== undefined && line.endMs !== null && Number.isFinite(Number(line.endMs))
+      ? Number(line.endMs)
+      : null,
+  }));
+
+  return {
+    ...json,
+    lineCount: lines.length,
+    languages: Array.isArray(json.languages) ? json.languages : inferLanguages(lines),
+    lines,
+  };
+}
+
+function metadataFromExistingJson(json: NushudContentJson, current: Metadata): Metadata {
+  const record = json as unknown as Record<string, unknown>;
+  const difficulty = record.difficulty;
+  const tags = Array.isArray(record.tags)
+    ? record.tags.filter((tag): tag is string => typeof tag === "string").join(", ")
+    : typeof record.tags === "string"
+      ? record.tags
+      : current.tags;
+
+  return {
+    id: typeof record.id === "string" ? record.id : current.id,
+    title: typeof record.title === "string" ? record.title : current.title,
+    artist: typeof record.artist === "string" ? record.artist : current.artist,
+    difficulty:
+      difficulty === "beginner" || difficulty === "intermediate" || difficulty === "advanced"
+        ? difficulty
+        : current.difficulty,
+    tags,
+  };
+}
+
+function completeExistingContentJson(
+  json: NushudContentJson,
+  metadata: Metadata,
+  arabicLines: string[],
+  translations: UploadedTextFile[],
+  timestamps: Array<number | null>,
+  firstLineStartMs: number,
+  audioDurationMs: number,
+  selectedAudioFileName: string,
+): NushudContentJson {
+  const record = json as unknown as Record<string, unknown>;
+  const activeTranslations = translations.filter((translation) => translation.languageCode.trim());
+  const languages = ["ar", ...Array.from(new Set(activeTranslations.map((translation) => translation.languageCode.trim().toLowerCase())))];
+  const lines = arabicLines.map((ar, index) => {
+    const existingLine = json.lines[index] ?? {};
+    const line: NushudContentJson["lines"][number] = {
+      ...existingLine,
+      lineIndex: index,
+      startMs: index === 0 ? firstLineStartMs : timestamps[index - 1] ?? 0,
+      endMs: timestamps[index] ?? null,
+      ar,
+    };
+    activeTranslations.forEach((translation) => {
+      line[translation.languageCode.trim().toLowerCase()] = translation.lines[index] ?? "";
+    });
+    return line;
+  });
+
+  return {
+    ...json,
+    id: metadata.id.trim(),
+    title: metadata.title.trim(),
+    artist: metadata.artist.trim(),
+    difficulty: metadata.difficulty,
+    tags: metadata.tags.split(",").map((tag) => tag.trim()).filter(Boolean),
+    audioFileName: selectedAudioFileName || (typeof record.audioFileName === "string" ? record.audioFileName : ""),
+    durationMs: audioDurationMs > 0 ? audioDurationMs : Number(record.durationMs) || undefined,
+    lineCount: lines.length,
+    languages,
+    lines,
+  };
+}
+
+function inferLanguages(lines: NushudContentJson["lines"]): string[] {
+  const structuralKeys = new Set(["lineIndex", "startMs", "endMs"]);
+  return Array.from(new Set(lines.flatMap((line) => Object.keys(line).filter((key) => !structuralKeys.has(key)))));
 }
 
 export default App;

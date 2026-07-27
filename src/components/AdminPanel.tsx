@@ -25,12 +25,17 @@ type LyricsMetadata = {
 
 type DictionaryEntry = {
   word: string;
-  baseWord?: string;
   meaning: string[];
+  meaningRu?: string[];
   root?: string;
+  plural?: string;
+  imperative?: string;
+  present?: string;
   wazn?: string;
-  forms?: string;
-  bab?: string;
+  masculine?: string;
+  feminine?: string;
+  governs?: string;
+  literalMeaning?: string;
   partOfSpeech?: string;
   translations?: unknown;
   similars?: unknown;
@@ -50,6 +55,17 @@ type WordContext = {
 
 const dictionaryBucket = "dictionary";
 const dictionaryPath = "words.json";
+const typeFields: Record<string, Array<{ key: string; label: string }>> = {
+  noun: [{ key: "root", label: "Root" }, { key: "plural", label: "Plural" }],
+  verb: [{ key: "imperative", label: "Imperative" }, { key: "present", label: "Present" }, { key: "wazn", label: "Wazn" }],
+  adjective: [{ key: "masculine", label: "Masculine" }, { key: "feminine", label: "Feminine" }, { key: "plural", label: "Plural" }],
+  adverb: [],
+  pronoun: [],
+  particle: [],
+  preposition: [{ key: "governs", label: "Governs" }],
+  conjunction: [],
+  expression: [{ key: "literalMeaning", label: "Literal meaning" }],
+};
 
 export function AdminPanel({
   supabase,
@@ -149,12 +165,11 @@ export function AdminPanel({
       const dictionary = mergeDictionaries(existingDictionary, newWords);
       const missingWords = getMissingDictionaryWords(generatedContentJson, dictionary);
 
-      if (missingWords.length > 0) {
-        writeLog(`Still missing dictionary entries after merge: ${formatMissingWords(missingWords)}`);
-        return;
-      }
-
-      writeLog(`Validation passed. ${Object.keys(newWords).length} new word entries will be merged into ${dictionaryPath}.`);
+      writeLog(
+        missingWords.length > 0
+          ? `Validation passed. Publishing is allowed with ${missingWords.length} dictionary words still missing: ${formatMissingWords(missingWords)}`
+          : `Validation passed. ${Object.keys(newWords).length} new word entries will be merged into ${dictionaryPath}.`,
+      );
     } catch (error) {
       writeLog(error instanceof Error ? error.message : "Validation failed.");
     }
@@ -173,10 +188,6 @@ export function AdminPanel({
       const newWords = dictionaryFromEntries(newWordEntries);
       const dictionary = mergeDictionaries(existingDictionary, newWords);
       const missingWords = getMissingDictionaryWords(generatedContentJson, dictionary);
-
-      if (missingWords.length > 0) {
-        throw new Error(`Still missing dictionary entries after merge: ${formatMissingWords(missingWords)}`);
-      }
 
       await uploadDictionary(supabase, dictionary);
 
@@ -215,7 +226,11 @@ export function AdminPanel({
       }
 
       setPublishState("Published");
-      writeLog("Published. NUSHUD can now load this nasheed from Supabase.");
+      writeLog(
+        missingWords.length > 0
+          ? `Published with ${missingWords.length} dictionary words still missing. You can complete words.json later.`
+          : "Published. NUSHUD can now load this nasheed from Supabase.",
+      );
     } catch (error) {
       writeLog(error instanceof Error ? error.message : "Publish failed.");
     }
@@ -273,15 +288,14 @@ export function AdminPanel({
                     <input value={entry.word} onChange={(event) => updateNewWordEntry(index, { word: event.target.value })} />
                   </label>
                   <label>
-                    Base word
-                    <input
-                      value={entry.baseWord ?? ""}
-                      onChange={(event) => updateNewWordEntry(index, { baseWord: event.target.value })}
-                      placeholder="لَيْل"
-                    />
+                    Part of speech
+                    <select value={entry.partOfSpeech ?? ""} onChange={(event) => updateNewWordEntry(index, { partOfSpeech: event.target.value })}>
+                      <option value="">(unclassified)</option>
+                      {Object.keys(typeFields).map((type) => <option key={type} value={type}>{type}</option>)}
+                    </select>
                   </label>
                   <label>
-                    Meanings
+                    Meanings (EN)
                     <input
                       value={entry.meaning.join(", ")}
                       onChange={(event) =>
@@ -292,37 +306,27 @@ export function AdminPanel({
                             .filter(Boolean),
                         })
                       }
-                      placeholder="he wrote, to write"
+                      placeholder="night, nighttime"
                     />
                   </label>
                   <label>
-                    Root
-                    <input value={entry.root ?? ""} onChange={(event) => updateNewWordEntry(index, { root: event.target.value })} />
-                  </label>
-                  <label>
-                    Wazn
-                    <input value={entry.wazn ?? ""} onChange={(event) => updateNewWordEntry(index, { wazn: event.target.value })} />
-                  </label>
-                  <label>
-                    Forms
+                    Meanings (RU)
                     <input
-                      value={entry.forms ?? ""}
-                      onChange={(event) => updateNewWordEntry(index, { forms: event.target.value })}
-                      placeholder="طَالَ، يَطُولُ"
+                      value={(entry.meaningRu ?? []).join(", ")}
+                      onChange={(event) => updateNewWordEntry(index, {
+                        meaningRu: event.target.value.split(",").map((meaning) => meaning.trim()).filter(Boolean),
+                      })}
                     />
                   </label>
-                  <label>
-                    Bab
-                    <input value={entry.bab ?? ""} onChange={(event) => updateNewWordEntry(index, { bab: event.target.value })} />
-                  </label>
-                  <label>
-                    Part of speech
-                    <input
-                      value={entry.partOfSpeech ?? ""}
-                      onChange={(event) => updateNewWordEntry(index, { partOfSpeech: event.target.value })}
-                      placeholder="verb, noun, particle"
-                    />
-                  </label>
+                  {(typeFields[entry.partOfSpeech ?? ""] ?? []).map((field) => (
+                    <label key={field.key}>
+                      {field.label}
+                      <input
+                        value={typeof entry[field.key] === "string" ? entry[field.key] as string : ""}
+                        onChange={(event) => updateNewWordEntry(index, { [field.key]: event.target.value })}
+                      />
+                    </label>
+                  ))}
                 </div>
               ))}
             </div>
@@ -373,10 +377,19 @@ async function downloadDictionary(supabase: SupabaseClient): Promise<Dictionary>
     return {};
   }
 
+  const json = parseDictionaryJson(await data.text());
+  return normalizeDictionaryInput(json);
+}
+
+function parseDictionaryJson(text: string): unknown {
+  const normalized = text.replace(/^\uFEFF/, "").trim();
+  if (!normalized) return {};
+
   try {
-    return normalizeDictionaryInput(JSON.parse(await data.text()));
-  } catch {
-    throw new Error(`${dictionaryPath} exists but is not valid JSON.`);
+    return JSON.parse(normalized);
+  } catch (error) {
+    const detail = error instanceof SyntaxError ? ` ${error.message}` : "";
+    throw new Error(`${dictionaryPath} exists but is not valid JSON.${detail}`);
   }
 }
 
@@ -461,7 +474,11 @@ function validateLyricsJson(json: NushudContentJson) {
     throw new Error(`lineCount says ${json.lineCount}, but lines has ${json.lines.length}.`);
   }
 
-  getLyricsMetadata(json);
+  const metadata = getLyricsMetadata(json);
+  const missing = getMissingMetadata(metadata);
+  if (missing.length > 0) {
+    throw new Error(`Lyrics JSON missing metadata: ${missing.join(", ")}`);
+  }
 }
 
 function getLyricsMetadata(json: NushudContentJson): LyricsMetadata {
@@ -474,17 +491,6 @@ function getLyricsMetadata(json: NushudContentJson): LyricsMetadata {
   const audioFileName = String(record.audioFileName ?? record.audio_file_name ?? "").trim();
   const durationMs = getDurationMs(json);
 
-  const missing = [
-    !slug && "id or slug",
-    !title && "title",
-    !artistName && "artist",
-    !durationMs && "duration from durationMs or line endMs",
-  ].filter(Boolean);
-
-  if (missing.length > 0) {
-    throw new Error(`Lyrics JSON missing metadata: ${missing.join(", ")}`);
-  }
-
   return {
     slug,
     title,
@@ -496,6 +502,15 @@ function getLyricsMetadata(json: NushudContentJson): LyricsMetadata {
     lineCount: json.lines.length,
     languages: Array.isArray(json.languages) ? json.languages : [],
   };
+}
+
+function getMissingMetadata(metadata: LyricsMetadata): string[] {
+  return [
+    !metadata.slug && "id or slug",
+    !metadata.title && "title",
+    !metadata.artistName && "artist",
+    !metadata.durationMs && "duration from durationMs or line endMs",
+  ].filter((value): value is string => Boolean(value));
 }
 
 function getDurationMs(json: NushudContentJson): number {
@@ -558,12 +573,8 @@ function dictionaryFromEntries(entries: DictionaryEntry[]): Dictionary {
 function createDraftEntry(word: string): DictionaryEntry {
   return {
     word,
-    baseWord: "",
     meaning: [],
-    root: "",
-    wazn: "",
-    forms: "",
-    bab: "",
+    meaningRu: [],
     partOfSpeech: "",
   };
 }
@@ -580,33 +591,41 @@ function normalizeDictionaryEntry(value: unknown, fallbackWord = ""): Dictionary
     : typeof record.meaning === "string"
       ? [record.meaning.trim()].filter(Boolean)
       : [];
+  const meaningRu = Array.isArray(record.meaningRu)
+    ? record.meaningRu.map((item) => String(item).trim()).filter(Boolean)
+    : typeof record.meaningRu === "string"
+      ? [record.meaningRu.trim()].filter(Boolean)
+      : [];
 
   if (!word) {
     throw new Error("Each dictionary entry needs a word.");
   }
 
-  if (meaning.length === 0) {
-    throw new Error(`${word} needs at least one meaning.`);
-  }
-
   return {
     ...record,
     word,
-    baseWord: typeof record.baseWord === "string" ? record.baseWord : undefined,
     meaning,
-    root: typeof record.root === "string" ? record.root : undefined,
-    wazn: typeof record.wazn === "string" ? record.wazn : undefined,
-    forms: typeof record.forms === "string" ? record.forms : undefined,
-    bab: typeof record.bab === "string" ? record.bab : undefined,
+    meaningRu,
     partOfSpeech: typeof record.partOfSpeech === "string" ? record.partOfSpeech : undefined,
   };
 }
 
 function mergeDictionaries(existingDictionary: Dictionary, newWords: Dictionary): Dictionary {
-  return {
-    ...existingDictionary,
-    ...newWords,
-  };
+  const merged = { ...existingDictionary };
+
+  Object.entries(newWords).forEach(([key, incoming]) => {
+    const existing = merged[key];
+    merged[key] = existing
+      ? {
+          ...existing,
+          ...incoming,
+          meaning: incoming.meaning.length > 0 ? incoming.meaning : existing.meaning,
+          meaningRu: (incoming.meaningRu ?? []).length > 0 ? incoming.meaningRu : existing.meaningRu,
+        }
+      : incoming;
+  });
+
+  return merged;
 }
 
 function getMissingDictionaryWords(lyrics: NushudContentJson, dictionary: Dictionary): string[] {

@@ -7,6 +7,7 @@ type UploadPanelProps = {
   arabicText: string;
   translations: UploadedTextFile[];
   keepEmptyLines: boolean;
+  hasImportedJson: boolean;
   onAudioUpload: (file: File | null) => void;
   onArabicUpload: (file: File | null) => void;
   onArabicTextChange: (text: string) => void;
@@ -24,6 +25,7 @@ export function UploadPanel({
   arabicText,
   translations,
   keepEmptyLines,
+  hasImportedJson,
   onAudioUpload,
   onArabicUpload,
   onArabicTextChange,
@@ -48,7 +50,7 @@ export function UploadPanel({
     <section className="panel">
       <div className="panel-heading">
         <h2>Uploads</h2>
-        <p>Drag MP3, upload files, or paste text</p>
+        <p>{hasImportedJson ? "Text loaded from JSON — only add the MP3" : "Drag MP3, upload files, or paste text"}</p>
       </div>
       <div className="upload-grid">
         <label
@@ -65,23 +67,23 @@ export function UploadPanel({
           <span>{audioFile?.name ?? "Drop MP3 here or choose file"}</span>
         </label>
         <label className="file-box">
-          <strong>Arabic lyrics .txt</strong>
+          <strong>{hasImportedJson ? "Arabic loaded from JSON" : "Arabic lyrics .txt"}</strong>
           <input
             type="file"
             accept="text/plain,.txt"
             onChange={(event) => onArabicUpload(event.target.files?.[0] ?? null)}
           />
-          <span>{arabicFileName || "No Arabic text selected"}</span>
+          <span>{hasImportedJson ? "Already loaded · choose TXT only to replace it" : arabicFileName || "No Arabic text selected"}</span>
         </label>
         <label className="file-box">
-          <strong>Translation .txt files</strong>
+          <strong>{hasImportedJson ? "Translations loaded from JSON" : "Translation .txt files"}</strong>
           <input
             type="file"
             accept="text/plain,.txt"
             multiple
             onChange={(event) => onTranslationsUpload(event.target.files)}
           />
-          <span>{translations.length ? `${translations.length} translation file(s)` : "Optional"}</span>
+          <span>{hasImportedJson ? `${translations.length} language(s) loaded · TXT is optional` : translations.length ? `${translations.length} translation file(s)` : "Optional"}</span>
         </label>
       </div>
       <label className="toggle-row">

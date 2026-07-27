@@ -7,6 +7,7 @@ type BuildExportArgs = {
   translations: UploadedTextFile[];
   timestamps: Array<number | null>;
   firstLineStartMs: number;
+  durationMs: number;
 };
 
 export function buildContentJson({
@@ -16,6 +17,7 @@ export function buildContentJson({
   translations,
   timestamps,
   firstLineStartMs,
+  durationMs,
 }: BuildExportArgs): NushudContentJson {
   const exportableTranslations: UploadedTextFile[] = [];
   const seenLanguageCodes = new Set(["ar"]);
@@ -57,6 +59,7 @@ export function buildContentJson({
       .map((tag) => tag.trim().toLowerCase())
       .filter(Boolean),
     audioFileName,
+    durationMs,
     lineCount: arabicLines.length,
     languages,
     lines,
