@@ -321,7 +321,7 @@ export function DictionaryPanel({ supabase, adminEmail }: DictionaryPanelProps) 
 
     const confirmed = window.confirm(
       `Fully rebuild and save all ${entries.length} words with AI? Every entry will be replaced. ` +
-        "The dictionary will only be saved if every required field is filled.",
+        "Progress will be saved after each small batch.",
     );
 
     if (!confirmed) {
@@ -329,47 +329,37 @@ export function DictionaryPanel({ supabase, adminEmail }: DictionaryPanelProps) 
     }
 
     const allWords = entries.map(([, entry]) => ({ word: entry.word, normalizedWord: normalizeArabicWord(entry.word), lines: [] }));
-    const rebuilt = new Map<string, DictionaryEntry>();
-    let pending = [...allWords];
+    const rebuiltDictionary: Dictionary = {};
+    const failedWords: string[] = [];
 
     try {
       setIsFilling(true);
       setSuggestions([]);
 
-      for (let attempt = 1; attempt <= 3 && pending.length > 0; attempt += 1) {
-        const retryWords = [...pending];
-        pending = [];
-        const rebuildBatchSize = 20;
+      for (let start = 0; start < allWords.length; start += aiBatchSize) {
+        const batch = allWords.slice(start, start + aiBatchSize);
+        writeStatus(`Regenerating words ${start + 1}-${start + batch.length} of ${allWords.length}...`);
 
-        for (let start = 0; start < retryWords.length; start += rebuildBatchSize) {
-          const batch = retryWords.slice(start, start + rebuildBatchSize);
-          writeStatus(`Full rebuild attempt ${attempt}/3: ${rebuilt.size} complete, processing ${batch.length} words...`);
-          try {
-            const generated = await requestAiDictionaryEntries(supabase, batch);
-            const generatedByKey = new Map(generated.map((entry) => [normalizeArabicWord(entry.word), entry]));
-            batch.forEach((context) => {
-              const entry = generatedByKey.get(context.normalizedWord);
-              if (entry && getMissingEntryFields(entry).length === 0) rebuilt.set(context.normalizedWord, entry);
-              else pending.push(context);
-            });
-          } catch {
-            pending.push(...batch);
-          }
-        }
+        const generated = await requestAiDictionaryEntriesWithFallback(supabase, batch, failedWords);
+        generated.forEach((entry) => {
+          rebuiltDictionary[normalizeArabicWord(entry.word)] = entry;
+        });
+        batch.forEach((context) => {
+          rebuiltDictionary[context.normalizedWord] = rebuiltDictionary[context.normalizedWord] ?? createDraftEntry(context.word);
+        });
+
+        await uploadDictionary(supabase, rebuiltDictionary);
+        setDictionary({ ...rebuiltDictionary });
+        writeStatus(`Checkpoint saved: ${Object.keys(rebuiltDictionary).length}/${allWords.length} regenerated.`);
       }
-
-      if (pending.length > 0 || rebuilt.size !== allWords.length) {
-        const failed = pending.slice(0, 12).map((context) => context.word).join(", ");
-        throw new Error(`Nothing was saved. AI could not fully complete ${pending.length} word(s) after 3 attempts: ${failed}${pending.length > 12 ? "…" : ""}`);
-      }
-
-      const rebuiltDictionary = Object.fromEntries(rebuilt);
-      await uploadDictionary(supabase, rebuiltDictionary);
-      setDictionary(rebuiltDictionary);
       setSelectedKey(Object.keys(rebuiltDictionary)[0] ?? "");
-      writeStatus(`Complete: regenerated, verified, and saved all ${rebuilt.size} entries. No required fields are blank.`);
+      writeStatus(
+        failedWords.length > 0
+          ? `Regenerate complete with checkpoints. Kept ${failedWords.length} failed words as drafts: ${formatVisibleWords(failedWords)}`
+          : `Regenerate complete. Saved ${Object.keys(rebuiltDictionary).length} entries.`,
+      );
     } catch (error) {
-      writeStatus(error instanceof Error ? error.message : "Full dictionary rebuild failed. Nothing was saved.");
+      writeStatus(error instanceof Error ? error.message : "Full dictionary rebuild failed. Progress checkpoints were saved.");
     } finally {
       setIsFilling(false);
     }
