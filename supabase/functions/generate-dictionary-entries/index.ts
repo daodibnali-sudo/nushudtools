@@ -163,23 +163,20 @@ async function generateEntries(apiKey: string, model: string, words: WordContext
     throw new Error("OpenAI response must contain an entries array.");
   }
 
-  return parsed.entries.map(normalizeEntry);
+  return words.map((context, index) => normalizeEntry(parsed.entries?.[index], context.word));
 }
 
-function normalizeEntry(value: unknown): DictionaryEntry {
+function normalizeEntry(value: unknown, fallbackWord = ""): DictionaryEntry {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("OpenAI returned an invalid dictionary entry.");
+    return createDraftEntry(fallbackWord);
   }
 
   const record = value as Record<string, unknown>;
-  const word = String(record.word ?? "").trim();
-  const partOfSpeech = String(record.partOfSpeech ?? "") as PartOfSpeech;
+  const word = String(record.word ?? fallbackWord).trim() || fallbackWord;
+  const rawPartOfSpeech = String(record.partOfSpeech ?? "").trim();
+  const partOfSpeech = (rawPartOfSpeech in typeFields ? rawPartOfSpeech : "noun") as PartOfSpeech;
   const meaning = asStringArray(record.meaning);
   const meaningRu = asStringArray(record.meaningRu);
-
-  if (!word || !(partOfSpeech in typeFields) || meaning.length === 0 || meaningRu.length === 0) {
-    throw new Error(`OpenAI returned an incomplete dictionary entry for ${word || "(unknown word)"}.`);
-  }
 
   const entry: DictionaryEntry = { word, partOfSpeech, meaning: meaning.slice(0, 4), meaningRu: meaningRu.slice(0, 4) };
 
@@ -188,17 +185,30 @@ function normalizeEntry(value: unknown): DictionaryEntry {
     (entry as Record<string, unknown>)[field] = fieldValue;
   }
 
-  const missingFields = typeFields[partOfSpeech].filter((field) => !String((entry as Record<string, unknown>)[field] ?? "").trim());
-  if (missingFields.length > 0) {
-    throw new Error(`AI left required fields blank for ${word}: ${missingFields.join(", ")}. Try regenerating this word.`);
-  }
-
   return entry;
 }
 
 function asStringArray(value: unknown): string[] {
+  if (typeof value === "string") {
+    return value
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+
   if (!Array.isArray(value)) return [];
   return value.map((item) => String(item).trim()).filter(Boolean);
+}
+
+function createDraftEntry(word: string): DictionaryEntry {
+  return {
+    word,
+    partOfSpeech: "noun",
+    meaning: [],
+    meaningRu: [],
+    root: "",
+    plural: "",
+  };
 }
 
 function parseWords(value: unknown): WordContext[] {
