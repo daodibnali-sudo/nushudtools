@@ -107,7 +107,7 @@ async function generateEntries(apiKey: string, model: string, words: WordContext
     },
     body: JSON.stringify({
       model,
-      response_format: { type: "json_schema", json_schema: entriesJsonSchema },
+      response_format: { type: "json_object" },
       messages: [
         {
           role: "system",
@@ -119,6 +119,8 @@ async function generateEntries(apiKey: string, model: string, words: WordContext
           content: JSON.stringify({
             words,
             fieldsByType: typeFields,
+            responseShape:
+              "Return a JSON object with an entries array. Each entry must include word, partOfSpeech, meaning, meaningRu, and only the extra fields required by fieldsByType for that partOfSpeech.",
             rules: [
               "meaning: 2 to 4 short English glosses for this specific word in this context, not a sentence translation.",
               "meaningRu: 2 to 4 non-empty short Russian glosses matching the same senses as meaning.",
@@ -140,7 +142,10 @@ async function generateEntries(apiKey: string, model: string, words: WordContext
   });
 
   if (!response.ok) {
-    throw new Error(`OpenAI request failed: ${response.status} ${response.statusText}`);
+    const errorBody = await response.text();
+    throw new Error(
+      `OpenAI request failed: ${response.status} ${response.statusText}${errorBody ? ` - ${errorBody.slice(0, 800)}` : ""}`,
+    );
   }
 
   const result = (await response.json()) as {
@@ -255,59 +260,3 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-// Shared "sense" fields every part-of-speech variant carries.
-const senseProperties = {
-  word: { type: "string", minLength: 1, description: "Arabic surface form from input, with harakat when appropriate." },
-  meaning: { type: "array", minItems: 2, maxItems: 4, items: { type: "string", minLength: 1 }, description: "2 to 4 non-empty short English glosses." },
-  meaningRu: { type: "array", minItems: 2, maxItems: 4, items: { type: "string", minLength: 1 }, description: "2 to 4 non-empty short Russian glosses." },
-};
-
-function posVariant(partOfSpeech: PartOfSpeech, extraProperties: Record<string, unknown> = {}) {
-  const properties = {
-    ...senseProperties,
-    partOfSpeech: { type: "string", enum: [partOfSpeech] },
-    ...extraProperties,
-  };
-
-  return {
-    type: "object",
-    properties,
-    required: Object.keys(properties),
-    additionalProperties: false,
-  };
-}
-
-const arabicField = { type: "string", minLength: 1, description: "Required Arabic with harakat. Never empty and never use a placeholder." };
-const requiredVerbField = {
-  type: "string",
-  minLength: 1,
-  description: "Required vocalized Arabic form. Never empty and never use a dash or an N/A marker.",
-};
-
-const entriesJsonSchema = {
-  name: "dictionary_entries",
-  strict: true,
-  schema: {
-    type: "object",
-    properties: {
-      entries: {
-        type: "array",
-        items: {
-          anyOf: [
-            posVariant("noun", { root: arabicField, plural: arabicField }),
-            posVariant("verb", { imperative: requiredVerbField, present: requiredVerbField, wazn: requiredVerbField }),
-            posVariant("adjective", { masculine: arabicField, feminine: arabicField, plural: arabicField }),
-            posVariant("adverb"),
-            posVariant("pronoun"),
-            posVariant("particle"),
-            posVariant("preposition", { governs: { type: "string", minLength: 1, description: "Required short label, e.g. genitive. Never empty." } }),
-            posVariant("conjunction"),
-            posVariant("expression", { literalMeaning: { type: "string", minLength: 1, description: "Required literal word-for-word English rendering. Never empty." } }),
-          ],
-        },
-      },
-    },
-    required: ["entries"],
-    additionalProperties: false,
-  },
-};

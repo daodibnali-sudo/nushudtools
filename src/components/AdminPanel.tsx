@@ -436,7 +436,7 @@ async function getFunctionErrorMessage(error: unknown): Promise<string> {
   const record = error as { message?: unknown; context?: unknown };
   const context = record.context;
 
-  if (context instanceof Response) {
+  if (isResponseLike(context)) {
     try {
       const body = (await context.clone().json()) as { error?: unknown };
       if (typeof body.error === "string") {
@@ -453,6 +453,10 @@ async function getFunctionErrorMessage(error: unknown): Promise<string> {
   }
 
   return typeof record.message === "string" ? record.message : "Unknown function error.";
+}
+
+function isResponseLike(value: unknown): value is Response {
+  return !!value && typeof value === "object" && "clone" in value;
 }
 
 function validateLyricsJson(json: NushudContentJson) {
