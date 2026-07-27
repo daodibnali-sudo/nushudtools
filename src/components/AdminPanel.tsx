@@ -145,14 +145,8 @@ export function AdminPanel({
       }
 
       const existingDictionary = await downloadDictionary(supabase);
-      const newWords = dictionaryFromEntries(newWordEntries);
+      const newWords = getDraftDictionaryWords(generatedContentJson, existingDictionary, dictionaryFromEntries(newWordEntries));
       const dictionary = mergeDictionaries(existingDictionary, newWords);
-      const missingWords = getMissingDictionaryWords(generatedContentJson, dictionary);
-
-      if (missingWords.length > 0) {
-        writeLog(`Still missing dictionary entries after merge: ${formatMissingWords(missingWords)}`);
-        return;
-      }
 
       writeLog(`Validation passed. ${Object.keys(newWords).length} new word entries will be merged into ${dictionaryPath}.`);
     } catch (error) {
@@ -170,13 +164,8 @@ export function AdminPanel({
       }
 
       const existingDictionary = await downloadDictionary(supabase);
-      const newWords = dictionaryFromEntries(newWordEntries);
+      const newWords = getDraftDictionaryWords(generatedContentJson, existingDictionary, dictionaryFromEntries(newWordEntries));
       const dictionary = mergeDictionaries(existingDictionary, newWords);
-      const missingWords = getMissingDictionaryWords(generatedContentJson, dictionary);
-
-      if (missingWords.length > 0) {
-        throw new Error(`Still missing dictionary entries after merge: ${formatMissingWords(missingWords)}`);
-      }
 
       await uploadDictionary(supabase, dictionary);
 
@@ -215,7 +204,7 @@ export function AdminPanel({
       }
 
       setPublishState("Published");
-      writeLog("Published. NUSHUD can now load this nasheed from Supabase.");
+      writeLog(`Published. Added ${Object.keys(newWords).length} draft dictionary entries to ${dictionaryPath}.`);
     } catch (error) {
       writeLog(error instanceof Error ? error.message : "Publish failed.");
     }
@@ -585,10 +574,6 @@ function normalizeDictionaryEntry(value: unknown, fallbackWord = ""): Dictionary
     throw new Error("Each dictionary entry needs a word.");
   }
 
-  if (meaning.length === 0) {
-    throw new Error(`${word} needs at least one meaning.`);
-  }
-
   return {
     ...record,
     word,
@@ -607,6 +592,21 @@ function mergeDictionaries(existingDictionary: Dictionary, newWords: Dictionary)
     ...existingDictionary,
     ...newWords,
   };
+}
+
+function getDraftDictionaryWords(
+  lyrics: NushudContentJson,
+  existingDictionary: Dictionary,
+  editedWords: Dictionary,
+): Dictionary {
+  const nextWords: Dictionary = { ...editedWords };
+
+  getNormalizedWordsFromLyrics(lyrics).forEach((normalizedWord) => {
+    if (existingDictionary[normalizedWord] || nextWords[normalizedWord]) return;
+    nextWords[normalizedWord] = createDraftEntry(normalizedWord);
+  });
+
+  return nextWords;
 }
 
 function getMissingDictionaryWords(lyrics: NushudContentJson, dictionary: Dictionary): string[] {
