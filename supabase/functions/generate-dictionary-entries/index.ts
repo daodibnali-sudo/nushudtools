@@ -163,7 +163,17 @@ async function generateEntries(apiKey: string, model: string, words: WordContext
     throw new Error("OpenAI response must contain an entries array.");
   }
 
-  return words.map((context, index) => normalizeEntry(parsed.entries?.[index], context.word));
+  const entriesByNormalizedWord = new Map<string, unknown>();
+  parsed.entries.forEach((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return;
+    const word = String((entry as Record<string, unknown>).word ?? "").trim();
+    if (word) entriesByNormalizedWord.set(normalizeArabicWord(word), entry);
+  });
+
+  return words.map((context, index) => {
+    const entry = entriesByNormalizedWord.get(normalizeArabicWord(context.word)) ?? parsed.entries?.[index];
+    return normalizeEntry(entry, context.word);
+  });
 }
 
 function normalizeEntry(value: unknown, fallbackWord = ""): DictionaryEntry {
@@ -209,6 +219,22 @@ function createDraftEntry(word: string): DictionaryEntry {
     root: "",
     plural: "",
   };
+}
+
+function normalizeArabicWord(text: string): string {
+  const withoutMarks = text
+    .normalize("NFKD")
+    .replace(/[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06ED]/g, "")
+    .replace(/\u0640/g, "");
+
+  return withoutMarks
+    .replace(/[\u0625\u0623\u0671\u0622]/g, "\u0627")
+    .replace(/\u0649/g, "\u064A")
+    .replace(/\u0624/g, "\u0648")
+    .replace(/\u0626/g, "\u064A")
+    .replace(/\u0629/g, "\u0647")
+    .replace(/[^\p{Script=Arabic}\p{Letter}\p{Number}]+/gu, "")
+    .trim();
 }
 
 function parseWords(value: unknown): WordContext[] {

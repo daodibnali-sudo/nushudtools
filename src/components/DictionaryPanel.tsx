@@ -286,21 +286,25 @@ export function DictionaryPanel({ supabase, adminEmail }: DictionaryPanelProps) 
       writeStatus(`Added ${contexts.length} missing or incomplete draft words to ${dictionaryPath}. Filling with AI now...`);
 
       const filledEntries: DictionaryEntry[] = [];
+      const failedWords: string[] = [];
       for (let start = 0; start < contexts.length; start += aiBatchSize) {
         const batch = contexts.slice(start, start + aiBatchSize);
         writeStatus(`AI filling nasheed words ${start + 1}-${start + batch.length} of ${contexts.length}...`);
-        filledEntries.push(...(await requestAiDictionaryEntries(supabase, batch)));
+        const batchEntries = await requestAiDictionaryEntriesWithFallback(supabase, batch, failedWords);
+        batchEntries.forEach((entry) => {
+          nextDictionary[normalizeArabicWord(entry.word)] = entry;
+        });
+        filledEntries.push(...batchEntries);
+
+        await uploadDictionary(supabase, nextDictionary);
+        setDictionary({ ...nextDictionary });
       }
 
-      filledEntries.forEach((entry) => {
-        nextDictionary[normalizeArabicWord(entry.word)] = entry;
-      });
-
-      await uploadDictionary(supabase, nextDictionary);
-      setDictionary(nextDictionary);
       setSelectedKey(normalizeArabicWord(filledEntries[0]?.word ?? contexts[0].word));
       writeStatus(
-        `Done. Scanned Supabase lyrics JSON, added ${contexts.length} missing or incomplete words, AI filled ${filledEntries.length}, and saved ${dictionaryPath}.`,
+        failedWords.length > 0
+          ? `Done with checkpoints. AI filled ${filledEntries.length}, kept ${failedWords.length} as drafts, and saved ${dictionaryPath}. Failed: ${formatVisibleWords(failedWords)}`
+          : `Done. Scanned Supabase lyrics JSON, AI filled ${filledEntries.length}, and saved ${dictionaryPath}.`,
       );
     } catch (error) {
       writeStatus(error instanceof Error ? error.message : "Could not scan all nasheeds.");
@@ -371,7 +375,7 @@ export function DictionaryPanel({ supabase, adminEmail }: DictionaryPanelProps) 
     }
   };
 
-  const aiBatchSize = 25;
+  const aiBatchSize = 5;
 
   const fillWordsWithAi = async (words: WordContext[]) => {
     try {
@@ -765,6 +769,28 @@ async function requestAiDictionaryEntries(supabase: SupabaseClient, words: WordC
   return entries.map((entry) => normalizeDictionaryEntry(entry));
 }
 
+async function requestAiDictionaryEntriesWithFallback(
+  supabase: SupabaseClient,
+  words: WordContext[],
+  failedWords: string[],
+): Promise<DictionaryEntry[]> {
+  try {
+    return await requestAiDictionaryEntries(supabase, words);
+  } catch {
+    const entries: DictionaryEntry[] = [];
+
+    for (const word of words) {
+      try {
+        entries.push(...(await requestAiDictionaryEntries(supabase, [word])));
+      } catch {
+        failedWords.push(word.word);
+      }
+    }
+
+    return entries;
+  }
+}
+
 async function getFunctionErrorMessage(error: unknown): Promise<string> {
   if (!error || typeof error !== "object") {
     return "Unknown function error.";
@@ -995,6 +1021,12 @@ function parseLyricsJson(text: string, label: string): NushudContentJson {
   }
 
   return json;
+}
+
+function formatVisibleWords(words: string[]): string {
+  const visibleWords = words.slice(0, 20).join(", ");
+  const hiddenCount = words.length - 20;
+  return hiddenCount > 0 ? `${visibleWords} ... and ${hiddenCount} more` : visibleWords;
 }
 
 function parseArabicWords(text: string): string[] {
