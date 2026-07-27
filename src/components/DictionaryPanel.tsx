@@ -267,18 +267,23 @@ export function DictionaryPanel({ supabase, adminEmail }: DictionaryPanelProps) 
     try {
       setIsScanningNasheeds(true);
       setSuggestions([]);
-      writeStatus("Scanning published nasheeds for missing dictionary words...");
+      writeStatus("Loading words.json and scanning Supabase lyrics JSON files...");
 
-      const contexts = await buildAllNasheedWordContexts(supabase, dictionary);
+      const latestDictionary = await downloadDictionary(supabase);
+      const contexts = await buildAllNasheedWordContexts(supabase, latestDictionary);
       if (contexts.length === 0) {
+        setDictionary(latestDictionary);
         writeStatus("All published nasheed words already have complete dictionary entries.");
         return;
       }
 
-      let nextDictionary: Dictionary = { ...dictionary };
+      const nextDictionary: Dictionary = { ...latestDictionary };
       contexts.forEach((context) => {
         nextDictionary[context.normalizedWord] = nextDictionary[context.normalizedWord] ?? createDraftEntry(context.word);
       });
+      await uploadDictionary(supabase, nextDictionary);
+      setDictionary(nextDictionary);
+      writeStatus(`Added ${contexts.length} missing or incomplete draft words to ${dictionaryPath}. Filling with AI now...`);
 
       const filledEntries: DictionaryEntry[] = [];
       for (let start = 0; start < contexts.length; start += aiBatchSize) {
@@ -295,7 +300,7 @@ export function DictionaryPanel({ supabase, adminEmail }: DictionaryPanelProps) 
       setDictionary(nextDictionary);
       setSelectedKey(normalizeArabicWord(filledEntries[0]?.word ?? contexts[0].word));
       writeStatus(
-        `Done. Scanned all nasheeds, added ${contexts.length} missing or incomplete words, AI filled ${filledEntries.length}, and saved ${dictionaryPath}.`,
+        `Done. Scanned Supabase lyrics JSON, added ${contexts.length} missing or incomplete words, AI filled ${filledEntries.length}, and saved ${dictionaryPath}.`,
       );
     } catch (error) {
       writeStatus(error instanceof Error ? error.message : "Could not scan all nasheeds.");
@@ -896,19 +901,10 @@ function buildMissingWordContexts(lyrics: NushudContentJson, dictionary: Diction
 }
 
 async function buildAllNasheedWordContexts(supabase: SupabaseClient, dictionary: Dictionary): Promise<WordContext[]> {
-  const { data, error } = await supabase.from("nasheeds").select("lyrics_json_url");
-
-  if (error) {
-    throw new Error(`Could not load nasheeds: ${error.message}`);
-  }
-
+  const lyricsFiles = await downloadAllSupabaseLyricsJson(supabase);
   const contexts = new Map<string, WordContext>();
 
-  for (const nasheed of data ?? []) {
-    const lyricsUrl = typeof nasheed.lyrics_json_url === "string" ? nasheed.lyrics_json_url : "";
-    if (!lyricsUrl) continue;
-
-    const lyrics = await fetchLyricsJson(lyricsUrl);
+  for (const lyrics of lyricsFiles) {
     lyrics.lines.forEach((line) => {
       tokenizeArabicLine(line.ar).forEach((word) => {
         const normalizedWord = normalizeArabicWord(word);
@@ -932,6 +928,56 @@ async function buildAllNasheedWordContexts(supabase: SupabaseClient, dictionary:
   return [...contexts.values()];
 }
 
+async function downloadAllSupabaseLyricsJson(supabase: SupabaseClient): Promise<NushudContentJson[]> {
+  const fromStorage = await downloadLyricsJsonsFromStorage(supabase);
+  if (fromStorage.length > 0) return fromStorage;
+
+  return downloadLyricsJsonsFromNasheedRows(supabase);
+}
+
+async function downloadLyricsJsonsFromStorage(supabase: SupabaseClient): Promise<NushudContentJson[]> {
+  const { data, error } = await supabase.storage.from("nasheed-lyrics").list("", {
+    limit: 1000,
+    offset: 0,
+    sortBy: { column: "name", order: "asc" },
+  });
+
+  if (error) {
+    throw new Error(`Could not list nasheed-lyrics storage: ${error.message}`);
+  }
+
+  const jsonFiles = (data ?? []).filter((file) => file.name.toLowerCase().endsWith(".json"));
+  const lyricsFiles: NushudContentJson[] = [];
+
+  for (const file of jsonFiles) {
+    const { data: blob, error: downloadError } = await supabase.storage.from("nasheed-lyrics").download(file.name);
+    if (downloadError) {
+      throw new Error(`Could not download nasheed-lyrics/${file.name}: ${downloadError.message}`);
+    }
+
+    lyricsFiles.push(parseLyricsJson(await blob.text(), `nasheed-lyrics/${file.name}`));
+  }
+
+  return lyricsFiles;
+}
+
+async function downloadLyricsJsonsFromNasheedRows(supabase: SupabaseClient): Promise<NushudContentJson[]> {
+  const { data, error } = await supabase.from("nasheeds").select("lyrics_json_url");
+
+  if (error) {
+    throw new Error(`Could not load nasheeds: ${error.message}`);
+  }
+
+  const lyricsFiles: NushudContentJson[] = [];
+  for (const nasheed of data ?? []) {
+    const lyricsUrl = typeof nasheed.lyrics_json_url === "string" ? nasheed.lyrics_json_url : "";
+    if (!lyricsUrl) continue;
+    lyricsFiles.push(await fetchLyricsJson(lyricsUrl));
+  }
+
+  return lyricsFiles;
+}
+
 async function fetchLyricsJson(url: string): Promise<NushudContentJson> {
   const response = await fetch(url);
 
@@ -939,9 +985,13 @@ async function fetchLyricsJson(url: string): Promise<NushudContentJson> {
     throw new Error(`Could not download lyrics JSON: ${response.status} ${response.statusText}`);
   }
 
-  const json = (await response.json()) as NushudContentJson;
+  return parseLyricsJson(await response.text(), url);
+}
+
+function parseLyricsJson(text: string, label: string): NushudContentJson {
+  const json = JSON.parse(text) as NushudContentJson;
   if (!json || !Array.isArray(json.lines)) {
-    throw new Error("A nasheed lyrics JSON did not contain a lines array.");
+    throw new Error(`${label} did not contain a lines array.`);
   }
 
   return json;
