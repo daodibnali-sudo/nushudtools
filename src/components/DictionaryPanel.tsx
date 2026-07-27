@@ -75,6 +75,7 @@ export function DictionaryPanel({ supabase, adminEmail }: DictionaryPanelProps) 
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isFilling, setIsFilling] = useState(false);
+  const [isScanningNasheeds, setIsScanningNasheeds] = useState(false);
   const [status, setStatus] = useState("Ready.");
 
   const entries = useMemo(
@@ -260,6 +261,47 @@ export function DictionaryPanel({ supabase, adminEmail }: DictionaryPanelProps) 
     }
 
     await fillWordsWithAi(missingWords);
+  };
+
+  const scanAllNasheedsAndFillWithAi = async () => {
+    try {
+      setIsScanningNasheeds(true);
+      setSuggestions([]);
+      writeStatus("Scanning published nasheeds for missing dictionary words...");
+
+      const contexts = await buildAllNasheedWordContexts(supabase, dictionary);
+      if (contexts.length === 0) {
+        writeStatus("All published nasheed words already have complete dictionary entries.");
+        return;
+      }
+
+      let nextDictionary: Dictionary = { ...dictionary };
+      contexts.forEach((context) => {
+        nextDictionary[context.normalizedWord] = nextDictionary[context.normalizedWord] ?? createDraftEntry(context.word);
+      });
+
+      const filledEntries: DictionaryEntry[] = [];
+      for (let start = 0; start < contexts.length; start += aiBatchSize) {
+        const batch = contexts.slice(start, start + aiBatchSize);
+        writeStatus(`AI filling nasheed words ${start + 1}-${start + batch.length} of ${contexts.length}...`);
+        filledEntries.push(...(await requestAiDictionaryEntries(supabase, batch)));
+      }
+
+      filledEntries.forEach((entry) => {
+        nextDictionary[normalizeArabicWord(entry.word)] = entry;
+      });
+
+      await uploadDictionary(supabase, nextDictionary);
+      setDictionary(nextDictionary);
+      setSelectedKey(normalizeArabicWord(filledEntries[0]?.word ?? contexts[0].word));
+      writeStatus(
+        `Done. Scanned all nasheeds, added ${contexts.length} missing or incomplete words, AI filled ${filledEntries.length}, and saved ${dictionaryPath}.`,
+      );
+    } catch (error) {
+      writeStatus(error instanceof Error ? error.message : "Could not scan all nasheeds.");
+    } finally {
+      setIsScanningNasheeds(false);
+    }
   };
 
   const regenerateAllWithAi = async () => {
@@ -600,6 +642,14 @@ export function DictionaryPanel({ supabase, adminEmail }: DictionaryPanelProps) 
           <button type="button" className="primary-button" onClick={fillMissingMeaningsWithAi} disabled={isFilling}>
             {isFilling ? "Asking AI..." : `Fill all incomplete entries (${incompleteEntries.length})`}
           </button>
+          <button
+            type="button"
+            className="primary-button"
+            onClick={scanAllNasheedsAndFillWithAi}
+            disabled={isFilling || isScanningNasheeds}
+          >
+            {isScanningNasheeds ? "Scanning..." : "Scan all nasheeds + save words.json"}
+          </button>
           <button type="button" className="ghost-button" onClick={regenerateAllWithAi} disabled={isFilling}>
             {isFilling ? "Asking AI..." : `Regenerate ALL entries (${entries.length})`}
           </button>
@@ -839,6 +889,58 @@ function buildMissingWordContexts(lyrics: NushudContentJson, dictionary: Diction
   });
 
   return [...contexts.values()];
+}
+
+async function buildAllNasheedWordContexts(supabase: SupabaseClient, dictionary: Dictionary): Promise<WordContext[]> {
+  const { data, error } = await supabase.from("nasheeds").select("lyrics_json_url");
+
+  if (error) {
+    throw new Error(`Could not load nasheeds: ${error.message}`);
+  }
+
+  const contexts = new Map<string, WordContext>();
+
+  for (const nasheed of data ?? []) {
+    const lyricsUrl = typeof nasheed.lyrics_json_url === "string" ? nasheed.lyrics_json_url : "";
+    if (!lyricsUrl) continue;
+
+    const lyrics = await fetchLyricsJson(lyricsUrl);
+    lyrics.lines.forEach((line) => {
+      tokenizeArabicLine(line.ar).forEach((word) => {
+        const normalizedWord = normalizeArabicWord(word);
+        if (!normalizedWord) return;
+
+        const existingEntry = dictionary[normalizedWord];
+        if (existingEntry && getMissingEntryFields(existingEntry).length === 0) return;
+
+        const context = contexts.get(normalizedWord) ?? { word: normalizedWord, normalizedWord, lines: [] };
+        if (context.lines.length < 3) {
+          context.lines.push({
+            ar: line.ar,
+            en: typeof line.en === "string" ? line.en : undefined,
+          });
+        }
+        contexts.set(normalizedWord, context);
+      });
+    });
+  }
+
+  return [...contexts.values()];
+}
+
+async function fetchLyricsJson(url: string): Promise<NushudContentJson> {
+  const response = await fetch(url);
+
+  if (!response.ok) {
+    throw new Error(`Could not download lyrics JSON: ${response.status} ${response.statusText}`);
+  }
+
+  const json = (await response.json()) as NushudContentJson;
+  if (!json || !Array.isArray(json.lines)) {
+    throw new Error("A nasheed lyrics JSON did not contain a lines array.");
+  }
+
+  return json;
 }
 
 function parseArabicWords(text: string): string[] {

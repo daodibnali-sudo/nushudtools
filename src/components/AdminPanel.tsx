@@ -161,7 +161,7 @@ export function AdminPanel({
       }
 
       const existingDictionary = await downloadDictionary(supabase);
-      const newWords = dictionaryFromEntries(newWordEntries);
+      const newWords = getDraftDictionaryWords(generatedContentJson, existingDictionary, dictionaryFromEntries(newWordEntries));
       const dictionary = mergeDictionaries(existingDictionary, newWords);
       const missingWords = getMissingDictionaryWords(generatedContentJson, dictionary);
 
@@ -185,7 +185,7 @@ export function AdminPanel({
       }
 
       const existingDictionary = await downloadDictionary(supabase);
-      const newWords = dictionaryFromEntries(newWordEntries);
+      const newWords = getDraftDictionaryWords(generatedContentJson, existingDictionary, dictionaryFromEntries(newWordEntries));
       const dictionary = mergeDictionaries(existingDictionary, newWords);
       const missingWords = getMissingDictionaryWords(generatedContentJson, dictionary);
 
@@ -228,8 +228,8 @@ export function AdminPanel({
       setPublishState("Published");
       writeLog(
         missingWords.length > 0
-          ? `Published with ${missingWords.length} dictionary words still missing. You can complete words.json later.`
-          : "Published. NUSHUD can now load this nasheed from Supabase.",
+          ? `Published and added ${Object.keys(newWords).length} draft words to ${dictionaryPath}. ${missingWords.length} still need AI or manual meanings.`
+          : `Published. Added ${Object.keys(newWords).length} draft word entries to ${dictionaryPath}.`,
       );
     } catch (error) {
       writeLog(error instanceof Error ? error.message : "Publish failed.");
@@ -626,6 +626,21 @@ function mergeDictionaries(existingDictionary: Dictionary, newWords: Dictionary)
   });
 
   return merged;
+}
+
+function getDraftDictionaryWords(
+  lyrics: NushudContentJson,
+  existingDictionary: Dictionary,
+  editedWords: Dictionary,
+): Dictionary {
+  const nextWords: Dictionary = { ...editedWords };
+
+  getNormalizedWordsFromLyrics(lyrics).forEach((normalizedWord) => {
+    if (existingDictionary[normalizedWord] || nextWords[normalizedWord]) return;
+    nextWords[normalizedWord] = createDraftEntry(normalizedWord);
+  });
+
+  return nextWords;
 }
 
 function getMissingDictionaryWords(lyrics: NushudContentJson, dictionary: Dictionary): string[] {
