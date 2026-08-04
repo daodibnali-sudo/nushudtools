@@ -70,6 +70,7 @@ export function DictionaryPanel({ supabase, adminEmail }: DictionaryPanelProps) 
   const [selectedKey, setSelectedKey] = useState("");
   const [query, setQuery] = useState("");
   const [showMissingMeaningsOnly, setShowMissingMeaningsOnly] = useState(false);
+  const [showNoMeaningOnly, setShowNoMeaningOnly] = useState(false);
   const [newWordsText, setNewWordsText] = useState("");
   const [suggestions, setSuggestions] = useState<DictionaryEntry[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -91,6 +92,7 @@ export function DictionaryPanel({ supabase, adminEmail }: DictionaryPanelProps) 
     const normalizedNeedle = normalizeArabicWord(query);
 
     return entries.filter(([key, entry]) => {
+      if (showNoMeaningOnly && !hasNoMeaningAtAll(entry)) return false;
       if (showMissingMeaningsOnly && getMissingEntryFields(entry).length === 0) return false;
       if (!needle && !normalizedNeedle) return true;
 
@@ -111,6 +113,11 @@ export function DictionaryPanel({ supabase, adminEmail }: DictionaryPanelProps) 
 
   const incompleteEntries = useMemo(
     () => entries.filter(([, entry]) => getMissingEntryFields(entry).length > 0),
+    [entries],
+  );
+
+  const noMeaningEntries = useMemo(
+    () => entries.filter(([, entry]) => hasNoMeaningAtAll(entry)),
     [entries],
   );
 
@@ -261,6 +268,21 @@ export function DictionaryPanel({ supabase, adminEmail }: DictionaryPanelProps) 
     }
 
     await fillWordsWithAi(missingWords);
+  };
+
+  const fillNoMeaningWordsWithAi = async () => {
+    const emptyWords = noMeaningEntries.map(([, entry]) => ({
+      word: entry.word,
+      normalizedWord: normalizeArabicWord(entry.word),
+      lines: [],
+    }));
+
+    if (emptyWords.length === 0) {
+      writeStatus("Every dictionary word already has at least one meaning.");
+      return;
+    }
+
+    await fillWordsWithAi(emptyWords);
   };
 
   const scanAllNasheedsAndFillWithAi = async () => {
@@ -489,6 +511,14 @@ export function DictionaryPanel({ supabase, adminEmail }: DictionaryPanelProps) 
           <label className="checkbox-row">
             <input
               type="checkbox"
+              checked={showNoMeaningOnly}
+              onChange={(event) => setShowNoMeaningOnly(event.target.checked)}
+            />
+            No meaning at all only ({noMeaningEntries.length})
+          </label>
+          <label className="checkbox-row">
+            <input
+              type="checkbox"
               checked={showMissingMeaningsOnly}
               onChange={(event) => setShowMissingMeaningsOnly(event.target.checked)}
             />
@@ -638,7 +668,10 @@ export function DictionaryPanel({ supabase, adminEmail }: DictionaryPanelProps) 
           <button type="button" className="ghost-button" onClick={checkVisibleWithAi} disabled={isFilling}>
             AI check visible list
           </button>
-          <button type="button" className="primary-button" onClick={fillMissingMeaningsWithAi} disabled={isFilling}>
+          <button type="button" className="primary-button" onClick={fillNoMeaningWordsWithAi} disabled={isFilling}>
+            {isFilling ? "Asking AI..." : `Fill words with no meaning (${noMeaningEntries.length})`}
+          </button>
+          <button type="button" className="ghost-button" onClick={fillMissingMeaningsWithAi} disabled={isFilling}>
             {isFilling ? "Asking AI..." : `Fill all incomplete entries (${incompleteEntries.length})`}
           </button>
           <button
@@ -853,6 +886,10 @@ function normalizeDictionaryEntry(value: unknown, fallbackWord = ""): Dictionary
   });
 
   return entry;
+}
+
+function hasNoMeaningAtAll(entry: DictionaryEntry): boolean {
+  return entry.meaning.length === 0 && (entry.meaningRu ?? []).length === 0;
 }
 
 function getMissingEntryFields(entry: DictionaryEntry): string[] {
